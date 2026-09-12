@@ -1,0 +1,14 @@
+[build]
+  functions = "netlify/functions"
+  publish = "."
+
+# Permet d'utiliser des URLs propres plutôt que /.netlify/functions/...
+[[redirects]]
+  from = "/auth/discord"
+  to = "/.netlify/functions/discord-auth"
+  status = 200
+
+[[redirects]]
+  from = "/auth/discord/callback"
+  to = "/.netlify/functions/discord-callback"
+  status = 200
