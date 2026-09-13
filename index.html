@@ -215,7 +215,7 @@
 
 <div id="shell">
   <aside id="sidebar">
-    <div class="brand"><span class="dot"></span>DeZo<span style="color:var(--bump)">Pub</span></div>
+    <div class="brand" style="cursor:pointer;" onclick="location.href = location.pathname;"><span class="dot"></span>DeZo<span style="color:var(--bump)">Pub</span></div>
     <nav id="navlinks"></nav>
     <div class="spacer"></div>
     <div class="foot">DeZoPub — annuaire de serveurs Discord, par <b>DeZoX</b></div>
@@ -370,13 +370,13 @@ function viewHome(){
   const list = filteredSortedAds();
   const header = `
     <div class="sorttabs">
-      <button class="${State._sort==='recent'?'active':''}" onclick="State._sort='recent';renderList()">🔥 Récents</button>
-      <button class="${State._sort==='votes'?'active':''}" onclick="State._sort='votes';renderList()">⭐ Les plus votés</button>
-      <button class="${State._sort==='az'?'active':''}" onclick="State._sort='az';renderList()">A–Z</button>
+      <button class="${State._sort==='recent'?'active':''}" onclick="setSort('recent')">🔥 Récents</button>
+      <button class="${State._sort==='votes'?'active':''}" onclick="setSort('votes')">⭐ Les plus votés</button>
+      <button class="${State._sort==='az'?'active':''}" onclick="setSort('az')">A–Z</button>
     </div>
     <div class="chiprow" id="tagChips">
-      <button class="chip ${!State._tagFilter?'active':''}" onclick="State._tagFilter=null;renderList()">Tous</button>
-      ${TAGS.map(t=>`<button class="chip ${State._tagFilter===t?'active':''}" onclick="State._tagFilter='${t}';renderList()">${t}</button>`).join('')}
+      <button class="chip ${!State._tagFilter?'active':''}" onclick="setTagFilter(null)">Tous</button>
+      ${TAGS.map(t=>`<button class="chip ${State._tagFilter===t?'active':''}" onclick="setTagFilter('${t}')">${t}</button>`).join('')}
     </div>
     <div id="adsGrid"></div>
   `;
@@ -478,7 +478,7 @@ function viewPublish(){
       <h3>1. Choisis ton serveur</h3>
       <p class="hint">Seuls les serveurs où tu es propriétaire ou administrateur apparaissent ici (détecté via ta connexion Discord).</p>
       ${guilds.length ? `<div class="guild-pick">${guilds.map(g=>`
-        <div class="guild-opt ${g.id===selectedId?'selected':''}" onclick="State._selectedGuild='${g.id}';render()">
+        <div class="guild-opt ${g.id===selectedId?'selected':''}" onclick="selectGuild('${g.id}')">
           <img src="${g.icon||''}" onerror="this.style.visibility='hidden'">
           <span class="n">${escapeHtml(g.name)}</span>
           ${g.owner?'<span class="own">PROPRIÉTAIRE</span>':''}
@@ -641,6 +641,15 @@ async function consumeDiscordAuthFromUrl(){
   }catch(e){ console.error('discordAuth parse error', e); }
   history.replaceState(null, '', location.pathname + location.hash);
 }
+
+/* ============================ GLOBAL UI HANDLERS (used by inline onclick) ============================ */
+window.closeModal = closeModal;
+window.openLoginModal = openLoginModal;
+window.openChannelModal = openChannelModal;
+window.openAccountModal = openAccountModal;
+window.setSort = function(v){ State._sort = v; renderList(); };
+window.setTagFilter = function(v){ State._tagFilter = v; renderList(); };
+window.selectGuild = function(id){ State._selectedGuild = id; render(); };
 
 /* ============================ MAIN RENDER ============================ */
 let _tickHandle = null;
