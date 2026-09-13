@@ -1,7 +1,11 @@
 // netlify/functions/discord-callback.js
 // Discord redirige ici après autorisation, avec un "code" temporaire.
-// On l'échange contre un token, on récupère l'identité réelle,
-// puis on renvoie la personne vers le site avec ses infos.
+// On l'échange contre un token, on récupère l'identité de l'utilisateur
+// ET la liste de ses serveurs où il a les droits d'administration
+// (nécessaire pour savoir quels serveurs il peut publier/bumper).
+
+const MANAGE_GUILD = 0x20n;
+const ADMINISTRATOR = 0x8n;
 
 exports.handler = async (event) => {
   const code = event.queryStringParameters && event.queryStringParameters.code;
@@ -10,6 +14,7 @@ exports.handler = async (event) => {
   }
 
   try {
+    // 1. Échange le code contre un access_token
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -23,32 +28,46 @@ exports.handler = async (event) => {
     });
     const tokenData = await tokenRes.json();
     if (!tokenData.access_token) throw new Error('Échange de token échoué');
+    const authHeader = { Authorization: `Bearer ${tokenData.access_token}` };
 
-    const userRes = await fetch('https://discord.com/api/users/@me', {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
-    });
+    // 2. Identité de l'utilisateur
+    const userRes = await fetch('https://discord.com/api/users/@me', { headers: authHeader });
     const user = await userRes.json();
 
     const avatarUrl = user.avatar
       ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`
       : `https://cdn.discordapp.com/embed/avatars/${Number(user.discriminator || 0) % 5}.png`;
 
-    // Comparaison avec TON id Discord (variable d'env OWNER_DISCORD_ID) —
-    // un id Discord ne peut pas être usurpé en tapant juste un pseudo.
-    const isOwner = user.id === process.env.OWNER_DISCORD_ID;
+    // 3. Liste des serveurs de l'utilisateur, filtrée sur ceux où il est
+    //    propriétaire OU a la permission MANAGE_GUILD/ADMINISTRATOR.
+    const guildsRes = await fetch('https://discord.com/api/users/@me/guilds', { headers: authHeader });
+    const allGuilds = await guildsRes.json();
+
+    const manageable = (Array.isArray(allGuilds) ? allGuilds : []).filter((g) => {
+      if (g.owner) return true;
+      try {
+        const perms = BigInt(g.permissions || '0');
+        return (perms & MANAGE_GUILD) === MANAGE_GUILD || (perms & ADMINISTRATOR) === ADMINISTRATOR;
+      } catch {
+        return false;
+      }
+    }).map((g) => ({
+      id: g.id,
+      name: g.name,
+      icon: g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png` : '',
+      owner: !!g.owner,
+    }));
 
     const payload = encodeURIComponent(JSON.stringify({
       discordId: user.id,
       username: user.username,
       avatar: avatarUrl,
-      isOwner,
+      guilds: manageable,
     }));
 
     return {
       statusCode: 302,
-      headers: {
-        Location: `${process.env.FRONTEND_URL}/?discordAuth=${payload}`,
-      },
+      headers: { Location: `${process.env.FRONTEND_URL}/?discordAuth=${payload}` },
     };
   } catch (err) {
     console.error(err);
