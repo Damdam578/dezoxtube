@@ -1,0 +1,9 @@
+{
+  "name": "dezoxtube",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DeZoPub - plateforme de publication de serveurs Discord",
+  "dependencies": {
+    "@netlify/blobs": "^11.1.0"
+  }
+}
