@@ -5083,7 +5083,7 @@ async function viewModerationLogs(){
                         ? "🚫"
                         : log.action === "unban"
                           ? "🔓"
-                          : log.action === "delete_ad"
+                          : log.action === "deleteAd"
                             ? "🗑️"
                             : "🛡️"
                     }
@@ -5419,7 +5419,7 @@ async function moderatorDeleteAd(id){
   try{
 
     await apiPost(
-      "moderator_delete_ad",
+      "deleteAd",
       {
         id
       }
@@ -5804,8 +5804,8 @@ async function savePublication(
     const result =
       await apiPost(
         existingId
-          ? "update_ad"
-          : "create_ad",
+          ? "updateAd"
+          : "createAd",
         {
           id: existingId,
           guildId,
@@ -5876,7 +5876,7 @@ async function deleteAd(id){
   try{
 
     await apiPost(
-      "delete_ad",
+      "deleteAd",
       {
         id
       }
@@ -5949,7 +5949,7 @@ async function toggleVote(id){
 
     const result =
       await apiPost(
-        "toggle_vote",
+        "vote",
         {
           adId:id
         }
@@ -6020,7 +6020,7 @@ async function addComment(adId){
 
     const result =
       await apiPost(
-        "create_comment",
+        "addComment",
         {
           adId,
           text
@@ -6058,7 +6058,7 @@ async function deleteComment(
   try{
 
     await apiPost(
-      "delete_comment",
+      "deleteComment",
       {
         commentId
       }
@@ -6356,14 +6356,23 @@ window.addEventListener(
 
   try{
 
-    await consumeDiscordAuthFromUrl();
+    const me =
+      await apiGet("me");
+
+    if(me.authenticated && me.user){
+      State.user = me.user;
+    }else{
+      State.user = null;
+    }
 
   }catch(error){
 
     console.error(
-      "Discord auth error:",
+      "Session Discord error:",
       error
     );
+
+    State.user = null;
   }
 
   /*
