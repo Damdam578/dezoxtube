@@ -1,223 +1,344 @@
-// netlify/functions/discord-callback.js
-
-const crypto = require("crypto");
-const { getStore, connectLambda } = require("@netlify/blobs");
+const {
+  getStore,
+  connectLambda,
+} = require("@netlify/blobs");
 
 const SESSION_STORE = "dezoxtube-sessions";
 
-const MANAGE_GUILD = 0x20n;
-const ADMINISTRATOR = 0x8n;
+const FRONTEND_URL =
+  process.env.FRONTEND_URL ||
+  "https://dezoxtube.netlify.app";
+
+function response(
+  statusCode,
+  headers = {},
+  body = ""
+) {
+  return {
+    statusCode,
+    headers,
+    body,
+  };
+}
+
+function redirect(url, cookie) {
+  return response(
+    302,
+    {
+      Location: url,
+      "Set-Cookie": cookie,
+      "Cache-Control": "no-store",
+    }
+  );
+}
+
+function createSessionId() {
+  return (
+    "sess_" +
+    Date.now().toString(36) +
+    "_" +
+    Math.random()
+      .toString(36)
+      .slice(2) +
+    Math.random()
+      .toString(36)
+      .slice(2)
+  );
+}
 
 exports.handler = async (event) => {
   try {
     try {
-      await connectLambda(event);
-    } catch {
-      // Pas nécessaire dans certains environnements Netlify.
-    }
+      connectLambda(event);
+    } catch {}
 
-    const code =
-      event.queryStringParameters &&
-      event.queryStringParameters.code;
+    const params =
+      event.queryStringParameters || {};
+
+    const code = params.code;
 
     if (!code) {
-      return {
-        statusCode: 400,
-        body: "Code Discord manquant.",
-      };
+      return response(
+        400,
+        {
+          "Content-Type":
+            "text/plain; charset=utf-8",
+        },
+        "Code Discord manquant."
+      );
     }
 
-    // 1. Échange du code OAuth contre un token Discord
-    const tokenRes = await fetch(
-      "https://discord.com/api/oauth2/token",
-      {
-        method: "POST",
-        headers: {
+    const clientId =
+      process.env.DISCORD_CLIENT_ID;
+
+    const clientSecret =
+      process.env.DISCORD_CLIENT_SECRET;
+
+    const redirectUri =
+      process.env.DISCORD_REDIRECT_URI;
+
+    if (
+      !clientId ||
+      !clientSecret ||
+      !redirectUri
+    ) {
+      console.error(
+        "Variables Discord manquantes."
+      );
+
+      return response(
+        500,
+        {
           "Content-Type":
-            "application/x-www-form-urlencoded",
+            "text/plain; charset=utf-8",
         },
-        body: new URLSearchParams({
-          client_id: process.env.DISCORD_CLIENT_ID,
-          client_secret:
-            process.env.DISCORD_CLIENT_SECRET,
-          grant_type: "authorization_code",
-          code,
-          redirect_uri:
-            process.env.DISCORD_REDIRECT_URI,
-        }),
-      }
-    );
+        "Configuration Discord incomplète."
+      );
+    }
 
-    const tokenData = await tokenRes.json();
+    /* =====================================================
+       1. ÉCHANGE DU CODE CONTRE UN TOKEN DISCORD
+    ===================================================== */
 
-    if (!tokenRes.ok || !tokenData.access_token) {
+    const tokenResponse =
+      await fetch(
+        "https://discord.com/api/oauth2/token",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/x-www-form-urlencoded",
+          },
+
+          body:
+            new URLSearchParams({
+              client_id: clientId,
+              client_secret: clientSecret,
+              grant_type:
+                "authorization_code",
+              code,
+              redirect_uri:
+                redirectUri,
+            }).toString(),
+        }
+      );
+
+    const tokenData =
+      await tokenResponse.json();
+
+    if (
+      !tokenResponse.ok ||
+      !tokenData.access_token
+    ) {
       console.error(
         "Discord token error:",
         tokenData
       );
 
-      throw new Error(
-        "Échange du token Discord échoué."
+      return response(
+        401,
+        {
+          "Content-Type":
+            "text/plain; charset=utf-8",
+        },
+        "Impossible de connecter ton compte Discord."
       );
     }
 
-    const authHeader = {
-      Authorization: `Bearer ${tokenData.access_token}`,
-    };
+    const accessToken =
+      tokenData.access_token;
 
-    // 2. Récupération de l'utilisateur Discord
-    const userRes = await fetch(
-      "https://discord.com/api/users/@me",
-      {
-        headers: authHeader,
-      }
-    );
+    const refreshToken =
+      tokenData.refresh_token ||
+      null;
 
-    const user = await userRes.json();
-
-    if (!userRes.ok || !user.id) {
-      throw new Error(
-        "Impossible de récupérer le compte Discord."
+    const expiresIn =
+      Number(
+        tokenData.expires_in || 604800
       );
-    }
 
-    // 3. Avatar Discord
-    const avatarUrl = user.avatar
-      ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128`
-      : `https://cdn.discordapp.com/embed/avatars/${
-          Number(user.discriminator || 0) % 5
-        }.png`;
+    /* =====================================================
+       2. RÉCUPÉRATION DU COMPTE DISCORD
+    ===================================================== */
 
-    // 4. Récupération des serveurs Discord
-    const guildsRes = await fetch(
-      "https://discord.com/api/users/@me/guilds",
-      {
-        headers: authHeader,
-      }
-    );
-
-    const allGuilds = await guildsRes.json();
-
-    if (!guildsRes.ok) {
-      throw new Error(
-        "Impossible de récupérer les serveurs Discord."
-      );
-    }
-
-    // 5. On garde uniquement les serveurs
-    // sur lesquels l'utilisateur peut gérer le serveur.
-    const manageable = (
-      Array.isArray(allGuilds)
-        ? allGuilds
-        : []
-    )
-      .filter((guild) => {
-        if (guild.owner) {
-          return true;
+    const userResponse =
+      await fetch(
+        "https://discord.com/api/users/@me",
+        {
+          headers: {
+            Authorization:
+              `Bearer ${accessToken}`,
+          },
         }
+      );
 
-        try {
-          const permissions = BigInt(
-            guild.permissions || "0"
-          );
+    const discordUser =
+      await userResponse.json();
 
-          return (
-            (permissions & MANAGE_GUILD) ===
-              MANAGE_GUILD ||
-            (permissions & ADMINISTRATOR) ===
-              ADMINISTRATOR
-          );
-        } catch {
-          return false;
+    if (
+      !userResponse.ok ||
+      !discordUser.id
+    ) {
+      console.error(
+        "Discord user error:",
+        discordUser
+      );
+
+      return response(
+        401,
+        {
+          "Content-Type":
+            "text/plain; charset=utf-8",
+        },
+        "Impossible de récupérer ton compte Discord."
+      );
+    }
+
+    /* =====================================================
+       3. RÉCUPÉRATION DES SERVEURS DISCORD
+    ===================================================== */
+
+    const guildResponse =
+      await fetch(
+        "https://discord.com/api/users/@me/guilds",
+        {
+          headers: {
+            Authorization:
+              `Bearer ${accessToken}`,
+          },
         }
-      })
-      .map((guild) => ({
-        id: guild.id,
-        name: guild.name,
+      );
 
-        icon: guild.icon
-          ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=128`
-          : "",
+    let guilds = [];
 
-        owner: !!guild.owner,
-      }));
+    if (guildResponse.ok) {
+      const allGuilds =
+        await guildResponse.json();
 
-    // 6. Création d'une session aléatoire
-    // L'identité Discord ne sera plus envoyée dans l'URL.
-    const sessionId = crypto.randomUUID();
+      /*
+        0x8  = ADMINISTRATOR
+        0x20 = MANAGE_GUILD
+      */
+
+      guilds =
+        Array.isArray(allGuilds)
+          ? allGuilds
+              .filter((guild) => {
+                const permissions =
+                  Number(
+                    guild.permissions || 0
+                  );
+
+                return (
+                  (permissions & 0x8) !== 0 ||
+                  (permissions & 0x20) !== 0
+                );
+              })
+              .map((guild) => ({
+                id: guild.id,
+
+                name:
+                  guild.name || "",
+
+                icon:
+                  guild.icon || null,
+
+                permissions:
+                  String(
+                    guild.permissions || "0"
+                  ),
+              }))
+          : [];
+    }
+
+    /* =====================================================
+       4. CRÉATION DE LA SESSION
+    ===================================================== */
+
+    const sessionId =
+      createSessionId();
 
     const session = {
-      discordId: user.id,
+      discordId:
+        String(discordUser.id),
+
       username:
-        user.global_name ||
-        user.username ||
-        "Utilisateur",
+        discordUser.global_name ||
+        discordUser.username ||
+        "",
 
-      avatar: avatarUrl,
+      avatar:
+        discordUser.avatar || null,
 
-      channelName:
-        user.global_name ||
-        user.username ||
-        "Utilisateur",
+      guilds,
 
-      guilds: manageable,
+      accessToken,
 
-      createdAt: Date.now(),
+      refreshToken,
 
-      // Session valable 30 jours.
+      tokenExpiresAt:
+        Date.now() +
+        expiresIn * 1000,
+
+      createdAt:
+        Date.now(),
+
       expiresAt:
         Date.now() +
         30 * 24 * 60 * 60 * 1000,
     };
 
-    // 7. Sauvegarde de la session côté serveur
-    const sessionStore =
+    const store =
       getStore(SESSION_STORE);
 
-    await sessionStore.setJSON(
+    await store.setJSON(
       sessionId,
       session
     );
 
-    // 8. Cookie sécurisé
+    /* =====================================================
+       5. COOKIE DE SESSION
+    ===================================================== */
+
     const cookie =
-      `dezox_session=${encodeURIComponent(sessionId)}; ` +
-      "Path=/; " +
-      "Max-Age=2592000; " +
-      "HttpOnly; " +
-      "Secure; " +
-      "SameSite=Lax";
+      [
+        `dezox_session=${encodeURIComponent(
+          sessionId
+        )}`,
 
-    // 9. Retour vers le site
-    return {
-      statusCode: 302,
+        "Path=/",
 
-      headers: {
-        Location:
-          process.env.FRONTEND_URL || "/",
+        "Max-Age=2592000",
 
-        "Set-Cookie": cookie,
+        "HttpOnly",
 
-        "Cache-Control":
-          "no-store",
-      },
-    };
+        "Secure",
+
+        "SameSite=Lax",
+      ].join("; ");
+
+    /* =====================================================
+       6. RETOUR SUR LE SITE
+    ===================================================== */
+
+    return redirect(
+      FRONTEND_URL,
+      cookie
+    );
   } catch (error) {
     console.error(
-      "Discord callback error:",
+      "discord-callback error:",
       error
     );
 
-    return {
-      statusCode: 500,
-
-      headers: {
+    return response(
+      500,
+      {
         "Content-Type":
           "text/plain; charset=utf-8",
       },
-
-      body:
-        "Échec de l'authentification Discord.",
-    };
+      "Erreur lors de la connexion Discord."
+    );
   }
 };
