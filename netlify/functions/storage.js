@@ -1,26 +1,80 @@
-// netlify/functions/storage.js
-
-const crypto = require("crypto");
-const { getStore, connectLambda } = require("@netlify/blobs");
+const {
+  getStore,
+  connectLambda,
+} = require("@netlify/blobs");
 
 const DATA_STORE = "dezoxtube-data";
 const SESSION_STORE = "dezoxtube-sessions";
-
 const MODERATOR_ID = "1543536698913456162";
 
-function json(statusCode, data) {
+const MANAGE_GUILD = 0x20;
+const ADMINISTRATOR = 0x8;
+
+/* =========================================================
+   NETLIFY BLOBS
+========================================================= */
+
+function dataStore() {
+  return getStore(DATA_STORE);
+}
+
+function sessionStore() {
+  return getStore(SESSION_STORE);
+}
+
+async function readJSON(store, key, fallback) {
+  const value = await store.get(key, { type: "json" });
+  return value == null ? fallback : value;
+}
+
+async function writeJSON(store, key, value) {
+  await store.setJSON(key, value);
+}
+
+/* =========================================================
+   RESPONSE
+========================================================= */
+
+function response(statusCode, body, extraHeaders = {}) {
   return {
     statusCode,
     headers: {
-      "Content-Type": "application/json",
+      "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
+      ...extraHeaders,
     },
-    body: JSON.stringify(data),
+    body: JSON.stringify(body),
   };
 }
 
+function ok(body = {}) {
+  return response(200, body);
+}
+
+function error(statusCode, message) {
+  return response(statusCode, { error: message });
+}
+
+/* =========================================================
+   BODY / COOKIES
+========================================================= */
+
+function parseBody(event) {
+  if (!event.body) return {};
+
+  try {
+    return JSON.parse(event.body);
+  } catch {
+    return {};
+  }
+}
+
 function getCookies(event) {
-  const header = event.headers?.cookie || event.headers?.Cookie || "";
+  const header =
+    event.headers?.cookie ||
+    event.headers?.Cookie ||
+    "";
+
   const cookies = {};
 
   header.split(";").forEach((part) => {
@@ -31,743 +85,1519 @@ function getCookies(event) {
     const key = part.slice(0, index).trim();
     const value = part.slice(index + 1).trim();
 
-    cookies[key] = decodeURIComponent(value);
+    if (key) cookies[key] = decodeURIComponent(value);
   });
 
   return cookies;
 }
 
-async function getSession(event) {
+function getSessionId(event) {
   const cookies = getCookies(event);
-  const sessionId = cookies.dezox_session;
+  return cookies.dezox_session || null;
+}
+
+/* =========================================================
+   SESSION
+========================================================= */
+
+async function getSession(event) {
+  const sessionId = getSessionId(event);
 
   if (!sessionId) return null;
 
-  const store = getStore(SESSION_STORE);
+  const store = sessionStore();
 
-  const session = await store.get(sessionId, {
-    type: "json",
-  });
+  const session = await readJSON(
+    store,
+    sessionId,
+    null
+  );
 
   if (!session) return null;
 
-  if (session.expiresAt && Date.now() > session.expiresAt) {
-    await store.delete(sessionId);
+  if (
+    session.expiresAt &&
+    Number(session.expiresAt) < Date.now()
+  ) {
+    try {
+      await store.delete(sessionId);
+    } catch {}
+
     return null;
   }
 
   return session;
 }
 
-async function requireSession(event) {
+async function requireUser(event) {
   const session = await getSession(event);
 
-  if (!session) {
-    throw new Error("AUTH_REQUIRED");
+  if (!session || !session.discordId) {
+    return {
+      error: error(401, "Tu dois être connecté avec Discord."),
+    };
   }
 
-  return session;
+  return {
+    user: session,
+  };
 }
 
-async function requireModerator(event) {
-  const session = await requireSession(event);
-
-  if (session.discordId !== MODERATOR_ID) {
-    throw new Error("MODERATOR_REQUIRED");
-  }
-
-  return session;
+function isModerator(user) {
+  return (
+    user &&
+    String(user.discordId) === MODERATOR_ID
+  );
 }
 
-async function readData(key, fallback) {
-  const store = getStore(DATA_STORE);
+/* =========================================================
+   DATA
+========================================================= */
 
-  const value = await store.get(key, {
-    type: "json",
-  });
+async function getData() {
+  const store = dataStore();
 
-  return value ?? fallback;
+  const data = await readJSON(
+    store,
+    "state",
+    {
+      ads: [],
+      comments: [],
+      votes: {},
+      bans: {},
+      moderationLogs: [],
+    }
+  );
+
+  return {
+    ads: Array.isArray(data.ads) ? data.ads : [],
+    comments: Array.isArray(data.comments)
+      ? data.comments
+      : [],
+    votes:
+      data.votes &&
+      typeof data.votes === "object"
+        ? data.votes
+        : {},
+    bans:
+      data.bans &&
+      typeof data.bans === "object"
+        ? data.bans
+        : {},
+    moderationLogs: Array.isArray(
+      data.moderationLogs
+    )
+      ? data.moderationLogs
+      : [],
+  };
 }
 
-async function writeData(key, value) {
-  const store = getStore(DATA_STORE);
-
-  await store.setJSON(key, value);
+async function saveData(data) {
+  await writeJSON(
+    dataStore(),
+    "state",
+    data
+  );
 }
 
-function now() {
-  return new Date().toISOString();
-}
+/* =========================================================
+   BAN SYSTEM
+========================================================= */
 
-function createId(prefix = "") {
-  return `${prefix}${crypto.randomUUID()}`;
-}
+function getActiveBan(data, discordId) {
+  const ban =
+    data.bans[String(discordId)];
 
-function getBody(event) {
-  try {
-    return event.body ? JSON.parse(event.body) : {};
-  } catch {
-    throw new Error("INVALID_JSON");
-  }
-}
+  if (!ban) return null;
 
-function isBanActive(ban) {
-  if (!ban) return false;
-
-  if (!ban.expiresAt) {
-    return true;
-  }
-
-  return Date.now() < new Date(ban.expiresAt).getTime();
-}
-
-async function getBan(discordId) {
-  const bans = await readData("bans", {});
-
-  const ban = bans[discordId];
-
-  if (!ban) {
-    return null;
-  }
-
-  if (!isBanActive(ban)) {
-    delete bans[discordId];
-    await writeData("bans", bans);
+  if (
+    ban.expiresAt !== null &&
+    Number(ban.expiresAt) <= Date.now()
+  ) {
+    delete data.bans[String(discordId)];
     return null;
   }
 
   return ban;
 }
 
-async function createModerationLog({
-  moderatorId,
-  moderatorUsername,
-  action,
-  targetDiscordId,
-  targetUsername,
-  adId,
-  reason,
-  duration,
-}) {
-  const logs = await readData("moderationLogs", []);
-
-  logs.unshift({
-    id: createId("log_"),
-    moderatorId,
-    moderatorUsername,
-    action,
-    targetDiscordId: targetDiscordId || null,
-    targetUsername: targetUsername || null,
-    adId: adId || null,
-    reason: reason || "",
-    duration: duration || null,
-    createdAt: now(),
-  });
-
-  // On garde les 1000 derniers logs.
-  await writeData(
-    "moderationLogs",
-    logs.slice(0, 1000)
+function isBanned(data, discordId) {
+  return !!getActiveBan(
+    data,
+    discordId
   );
 }
 
-async function handlePublic() {
-  const ads = await readData("ads", []);
-  const comments = await readData("comments", []);
-  const votes = await readData("votes", {});
+function durationToMs(duration) {
+  switch (String(duration).toLowerCase()) {
+    case "1h":
+    case "1hour":
+    case "1heure":
+      return 60 * 60 * 1000;
 
-  return json(200, {
-    ads,
-    comments,
-    votes,
+    case "24h":
+    case "24hours":
+    case "24heures":
+      return 24 * 60 * 60 * 1000;
+
+    case "7d":
+    case "7days":
+    case "7jours":
+      return 7 * 24 * 60 * 60 * 1000;
+
+    case "30d":
+    case "30days":
+    case "30jours":
+      return 30 * 24 * 60 * 60 * 1000;
+
+    case "permanent":
+    case "perm":
+    case "perma":
+      return null;
+
+    default:
+      return null;
+  }
+}
+
+/* =========================================================
+   DISCORD
+========================================================= */
+
+async function discordRequest(
+  url,
+  accessToken,
+  options = {}
+) {
+  const headers = {
+    Accept: "application/json",
+    Authorization: `Bearer ${accessToken}`,
+    ...(options.headers || {}),
+  };
+
+  return fetch(url, {
+    ...options,
+    headers,
   });
 }
 
-async function handleMe(event) {
-  const session = await getSession(event);
-
-  if (!session) {
-    return json(200, {
-      authenticated: false,
-      user: null,
-    });
+async function getGuild(user, guildId) {
+  if (!user?.accessToken) {
+    return null;
   }
 
-  return json(200, {
-    authenticated: true,
-    user: {
-      discordId: session.discordId,
-      username: session.username,
-      avatar: session.avatar,
-      channelName: session.channelName,
-      guilds: session.guilds || [],
-    },
-  });
+  try {
+    const res = await discordRequest(
+      `https://discord.com/api/users/@me/guilds`,
+      user.accessToken
+    );
+
+    if (!res.ok) return null;
+
+    const guilds = await res.json();
+
+    return (
+      guilds.find(
+        (guild) =>
+          String(guild.id) === String(guildId)
+      ) || null
+    );
+  } catch (e) {
+    console.error(
+      "Discord guild error:",
+      e
+    );
+
+    return null;
+  }
 }
 
-async function handleCreateAd(event, body, session) {
-  const ban = await getBan(session.discordId);
+function canManageGuild(guild) {
+  if (!guild) return false;
 
-  if (ban) {
-    return json(403, {
-      error: "USER_BANNED",
-      ban,
-    });
+  const permissions = Number(
+    guild.permissions || 0
+  );
+
+  return (
+    (permissions & ADMINISTRATOR) !== 0 ||
+    (permissions & MANAGE_GUILD) !== 0
+  );
+}
+
+/* =========================================================
+   AD HELPERS
+========================================================= */
+
+function cleanTags(tags) {
+  if (!Array.isArray(tags)) return [];
+
+  return tags
+    .map((tag) =>
+      String(tag).trim().slice(0, 40)
+    )
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function normalizeMemberCount(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
   }
 
-  const {
-    guildId,
-    guildName,
-    guildIcon,
-    description,
-    tags,
-    invite,
-    image,
-  } = body;
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return null;
+  }
+
+  return Math.max(
+    0,
+    Math.floor(number)
+  );
+}
+
+function validInvite(link) {
+  if (!link) return true;
+
+  return /^https:\/\/(discord\.gg|discord\.com\/invite\/)[A-Za-z0-9-]+/i.test(
+    String(link)
+  );
+}
+
+function createId(prefix) {
+  return `${prefix}_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+}
+
+/* =========================================================
+   LOGS
+========================================================= */
+
+function addModerationLog(
+  data,
+  action,
+  moderator,
+  details = {}
+) {
+  data.moderationLogs.unshift({
+    id: createId("log"),
+    action,
+    moderatorDiscordId:
+      moderator.discordId,
+    moderatorUsername:
+      moderator.username || "",
+    timestamp: Date.now(),
+    ...details,
+  });
+
+  data.moderationLogs =
+    data.moderationLogs.slice(0, 500);
+}
+
+/* =========================================================
+   CREATE AD
+========================================================= */
+
+async function createAd(
+  event,
+  user,
+  body,
+  data
+) {
+  if (isBanned(data, user.discordId)) {
+    return error(
+      403,
+      "Tu es actuellement banni et ne peux pas publier."
+    );
+  }
+
+  const guildId = String(
+    body.guildId || ""
+  );
 
   if (!guildId) {
-    return json(400, {
-      error: "GUILD_REQUIRED",
-    });
+    return error(
+      400,
+      "Serveur Discord invalide."
+    );
   }
 
-  // Vérification serveur :
-  // l'utilisateur doit réellement avoir accès
-  // au serveur Discord concerné.
-  const guild = (session.guilds || []).find(
-    (g) => String(g.id) === String(guildId)
+  const guild = await getGuild(
+    user,
+    guildId
   );
 
   if (!guild) {
-    return json(403, {
-      error: "GUILD_NOT_ALLOWED",
-    });
+    return error(
+      403,
+      "Impossible de vérifier ce serveur Discord."
+    );
   }
 
-  const ads = await readData("ads", []);
+  if (!canManageGuild(guild)) {
+    return error(
+      403,
+      "Tu dois avoir la permission de gérer ce serveur."
+    );
+  }
 
-  const existingIndex = ads.findIndex(
+  const description = String(
+    body.description || ""
+  )
+    .trim()
+    .slice(0, 2000);
+
+  if (!description) {
+    return error(
+      400,
+      "La description est obligatoire."
+    );
+  }
+
+  const inviteLink = String(
+    body.inviteLink ||
+      body.invite ||
+      ""
+  ).trim();
+
+  if (!validInvite(inviteLink)) {
+    return error(
+      400,
+      "Lien Discord invalide."
+    );
+  }
+
+  const memberCount =
+    normalizeMemberCount(
+      body.memberCount
+    );
+
+  /*
+    Un seul affichage par serveur et par créateur.
+  */
+
+  const existing = data.ads.find(
     (ad) =>
-      String(ad.guildId) === String(guildId) &&
-      String(ad.authorDiscordId) === String(session.discordId)
+      String(ad.guildId) === guildId &&
+      String(ad.authorDiscordId) ===
+        String(user.discordId)
   );
 
-  const ad = {
-    id:
-      existingIndex >= 0
-        ? ads[existingIndex].id
-        : createId("ad_"),
-
-    guildId,
-    guildName: guildName || guild.name || "",
-    guildIcon: guildIcon || guild.icon || "",
-
-    description: String(description || "").slice(0, 2000),
-
-    tags: Array.isArray(tags)
-      ? tags.slice(0, 10)
-      : [],
-
-    invite: String(invite || "").slice(0, 500),
-    image: String(image || "").slice(0, 1000),
-
-    authorDiscordId: session.discordId,
-    authorUsername: session.username,
-
-    createdAt:
-      existingIndex >= 0
-        ? ads[existingIndex].createdAt
-        : now(),
-
-    updatedAt: now(),
-
-    votes:
-      existingIndex >= 0
-        ? Number(ads[existingIndex].votes || 0)
-        : 0,
-  };
-
-  if (existingIndex >= 0) {
-    ads[existingIndex] = {
-      ...ads[existingIndex],
-      ...ad,
-    };
-  } else {
-    ads.push(ad);
+  if (existing) {
+    return error(
+      409,
+      "Tu as déjà une publication pour ce serveur."
+    );
   }
 
-  await writeData("ads", ads);
+  const now = Date.now();
 
-  return json(200, {
+  const ad = {
+    id: createId("ad"),
+
+    guildId,
+
+    guildName:
+      guild.name ||
+      body.guildName ||
+      "",
+
+    guildIcon:
+      guild.icon ||
+      body.guildIcon ||
+      null,
+
+    description,
+
+    inviteLink,
+
+    memberCount,
+
+    tags: cleanTags(body.tags),
+
+    image:
+      body.image
+        ? String(body.image).slice(0, 1000)
+        : null,
+
+    authorDiscordId:
+      String(user.discordId),
+
+    authorUsername:
+      user.username || "",
+
+    authorAvatar:
+      user.avatar || null,
+
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  data.ads.unshift(ad);
+
+  await saveData(data);
+
+  return ok({
     success: true,
     ad,
   });
 }
 
-async function handleDeleteAd(event, body, session) {
-  const adId = body.id;
+/* =========================================================
+   UPDATE AD
+========================================================= */
 
-  if (!adId) {
-    return json(400, {
-      error: "AD_ID_REQUIRED",
-    });
+async function updateAd(
+  event,
+  user,
+  body,
+  data
+) {
+  if (isBanned(data, user.discordId)) {
+    return error(
+      403,
+      "Tu es actuellement banni et ne peux pas modifier une publication."
+    );
   }
 
-  const ads = await readData("ads", []);
-
-  const ad = ads.find(
-    (item) => String(item.id) === String(adId)
+  const id = String(
+    body.id || ""
   );
 
-  if (!ad) {
-    return json(404, {
-      error: "AD_NOT_FOUND",
-    });
+  let ad = null;
+
+  if (id) {
+    ad = data.ads.find(
+      (item) =>
+        String(item.id) === id
+    );
   }
 
-  const isOwner =
+  /*
+    Compatibilité si l'ancien frontend
+    n'envoie pas d'ID.
+  */
+
+  if (!ad && body.guildId) {
+    ad = data.ads.find(
+      (item) =>
+        String(item.guildId) ===
+          String(body.guildId) &&
+        String(item.authorDiscordId) ===
+          String(user.discordId)
+    );
+  }
+
+  if (!ad) {
+    return error(
+      404,
+      "Publication introuvable."
+    );
+  }
+
+  const owner =
     String(ad.authorDiscordId) ===
-    String(session.discordId);
+    String(user.discordId);
 
-  const isModerator =
-    String(session.discordId) === MODERATOR_ID;
-
-  if (!isOwner && !isModerator) {
-    return json(403, {
-      error: "NOT_ALLOWED",
-    });
+  if (!owner && !isModerator(user)) {
+    return error(
+      403,
+      "Tu ne peux modifier que tes propres publications."
+    );
   }
 
-  const newAds = ads.filter(
-    (item) => String(item.id) !== String(adId)
+  const description =
+    body.description !== undefined
+      ? String(body.description)
+          .trim()
+          .slice(0, 2000)
+      : ad.description;
+
+  if (!description) {
+    return error(
+      400,
+      "La description est obligatoire."
+    );
+  }
+
+  const inviteLink =
+    body.inviteLink !== undefined
+      ? String(body.inviteLink).trim()
+      : ad.inviteLink || "";
+
+  if (!validInvite(inviteLink)) {
+    return error(
+      400,
+      "Lien Discord invalide."
+    );
+  }
+
+  ad.description = description;
+  ad.inviteLink = inviteLink;
+
+  if (
+    body.memberCount !== undefined
+  ) {
+    ad.memberCount =
+      normalizeMemberCount(
+        body.memberCount
+      );
+  }
+
+  if (body.tags !== undefined) {
+    ad.tags = cleanTags(body.tags);
+  }
+
+  if (body.image !== undefined) {
+    ad.image = body.image
+      ? String(body.image).slice(0, 1000)
+      : null;
+  }
+
+  ad.updatedAt = Date.now();
+
+  await saveData(data);
+
+  return ok({
+    success: true,
+    ad,
+  });
+}
+
+/* =========================================================
+   DELETE AD
+========================================================= */
+
+async function deleteAd(
+  event,
+  user,
+  body,
+  data
+) {
+  const id = String(
+    body.id || ""
   );
 
-  await writeData("ads", newAds);
-
-  if (isModerator && !isOwner) {
-    await createModerationLog({
-      moderatorId: session.discordId,
-      moderatorUsername: session.username,
-      action: "DELETE_AD",
-      targetDiscordId: ad.authorDiscordId,
-      targetUsername: ad.authorUsername,
-      adId: ad.id,
-      reason: body.reason || "",
-    });
+  if (!id) {
+    return error(
+      400,
+      "Publication invalide."
+    );
   }
 
-  return json(200, {
+  const index =
+    data.ads.findIndex(
+      (ad) =>
+        String(ad.id) === id
+    );
+
+  if (index === -1) {
+    return error(
+      404,
+      "Publication introuvable."
+    );
+  }
+
+  const ad = data.ads[index];
+
+  const owner =
+    String(ad.authorDiscordId) ===
+    String(user.discordId);
+
+  const moderator =
+    isModerator(user);
+
+  if (!owner && !moderator) {
+    return error(
+      403,
+      "Tu ne peux supprimer que tes propres publications."
+    );
+  }
+
+  data.ads.splice(index, 1);
+
+  data.comments =
+    data.comments.filter(
+      (comment) =>
+        String(comment.adId) !== id
+    );
+
+  delete data.votes[id];
+
+  if (moderator && !owner) {
+    addModerationLog(
+      data,
+      "delete_ad",
+      user,
+      {
+        adId: id,
+        authorDiscordId:
+          ad.authorDiscordId,
+        guildId: ad.guildId,
+      }
+    );
+  }
+
+  await saveData(data);
+
+  return ok({
     success: true,
   });
 }
 
-async function handleVote(event, body, session) {
-  const adId = body.adId;
+/* =========================================================
+   VOTE
+========================================================= */
+
+async function vote(
+  event,
+  user,
+  body,
+  data
+) {
+  const adId = String(
+    body.id ||
+      body.adId ||
+      ""
+  );
 
   if (!adId) {
-    return json(400, {
-      error: "AD_ID_REQUIRED",
-    });
+    return error(
+      400,
+      "Publication invalide."
+    );
   }
 
-  const ads = await readData("ads", []);
-
-  const ad = ads.find(
-    (item) => String(item.id) === String(adId)
+  const ad = data.ads.find(
+    (item) =>
+      String(item.id) === adId
   );
 
   if (!ad) {
-    return json(404, {
-      error: "AD_NOT_FOUND",
-    });
+    return error(
+      404,
+      "Publication introuvable."
+    );
   }
 
-  const votes = await readData("votes", {});
-
-  if (!votes[adId]) {
-    votes[adId] = {};
+  if (!Array.isArray(data.votes[adId])) {
+    data.votes[adId] = [];
   }
 
-  const userId = session.discordId;
+  const voters =
+    data.votes[adId];
 
-  if (votes[adId][userId]) {
-    delete votes[adId][userId];
+  const userId =
+    String(user.discordId);
+
+  const index =
+    voters.indexOf(userId);
+
+  let voted;
+
+  if (index === -1) {
+    voters.push(userId);
+    voted = true;
   } else {
-    votes[adId][userId] = true;
+    voters.splice(index, 1);
+    voted = false;
   }
 
-  const count = Object.keys(votes[adId]).length;
+  await saveData(data);
 
-  ad.votes = count;
-
-  await writeData("votes", votes);
-  await writeData("ads", ads);
-
-  return json(200, {
+  return ok({
     success: true,
-    voted: !!votes[adId][userId],
-    votes: count,
+    voted,
+    votes: voters.length,
   });
 }
 
-async function handleAddComment(event, body, session) {
-  const adId = body.adId;
+/* =========================================================
+   COMMENTS
+========================================================= */
 
-  if (!adId) {
-    return json(400, {
-      error: "AD_ID_REQUIRED",
-    });
-  }
-
-  const ads = await readData("ads", []);
-
-  const adExists = ads.some(
-    (ad) => String(ad.id) === String(adId)
+async function addComment(
+  event,
+  user,
+  body,
+  data
+) {
+  const adId = String(
+    body.adId || ""
   );
 
-  if (!adExists) {
-    return json(404, {
-      error: "AD_NOT_FOUND",
-    });
+  const text = String(
+    body.text ||
+      body.content ||
+      ""
+  )
+    .trim()
+    .slice(0, 1000);
+
+  if (!adId || !text) {
+    return error(
+      400,
+      "Commentaire invalide."
+    );
   }
 
-  const text = String(body.text || "").trim();
+  const ad = data.ads.find(
+    (item) =>
+      String(item.id) === adId
+  );
 
-  if (!text) {
-    return json(400, {
-      error: "COMMENT_EMPTY",
-    });
+  if (!ad) {
+    return error(
+      404,
+      "Publication introuvable."
+    );
   }
-
-  if (text.length > 1000) {
-    return json(400, {
-      error: "COMMENT_TOO_LONG",
-    });
-  }
-
-  const comments = await readData("comments", []);
 
   const comment = {
-    id: createId("comment_"),
+    id: createId("comment"),
     adId,
+
+    discordId:
+      String(user.discordId),
+
+    username:
+      user.username || "",
+
+    avatar:
+      user.avatar || null,
+
     text,
-    authorDiscordId: session.discordId,
-    authorUsername: session.username,
-    authorAvatar: session.avatar,
-    createdAt: now(),
+
+    createdAt: Date.now(),
   };
 
-  comments.push(comment);
+  data.comments.push(comment);
 
-  await writeData("comments", comments);
+  await saveData(data);
 
-  return json(200, {
+  return ok({
     success: true,
     comment,
   });
 }
 
-async function handleDeleteComment(event, body, session) {
-  const commentId = body.id;
-
-  const comments = await readData("comments", []);
-
-  const comment = comments.find(
-    (item) => String(item.id) === String(commentId)
+async function deleteComment(
+  event,
+  user,
+  body,
+  data
+) {
+  const commentId = String(
+    body.commentId ||
+      body.id ||
+      ""
   );
 
-  if (!comment) {
-    return json(404, {
-      error: "COMMENT_NOT_FOUND",
-    });
+  const index =
+    data.comments.findIndex(
+      (comment) =>
+        String(comment.id) ===
+        commentId
+    );
+
+  if (index === -1) {
+    return error(
+      404,
+      "Commentaire introuvable."
+    );
   }
 
-  const isOwner =
-    String(comment.authorDiscordId) ===
-    String(session.discordId);
+  const comment =
+    data.comments[index];
 
-  const isModerator =
-    String(session.discordId) === MODERATOR_ID;
+  const owner =
+    String(comment.discordId) ===
+    String(user.discordId);
 
-  if (!isOwner && !isModerator) {
-    return json(403, {
-      error: "NOT_ALLOWED",
-    });
+  if (!owner && !isModerator(user)) {
+    return error(
+      403,
+      "Tu ne peux supprimer que tes propres commentaires."
+    );
   }
 
-  await writeData(
-    "comments",
-    comments.filter(
-      (item) => String(item.id) !== String(commentId)
-    )
-  );
+  data.comments.splice(index, 1);
 
-  return json(200, {
+  await saveData(data);
+
+  return ok({
     success: true,
   });
 }
 
-async function handleModeration(event) {
-  const session = await requireModerator(event);
+/* =========================================================
+   BAN
+========================================================= */
 
-  const ads = await readData("ads", []);
-  const bans = await readData("bans", {});
-  const logs = await readData("moderationLogs", []);
+async function banUser(
+  event,
+  user,
+  body,
+  data
+) {
+  if (!isModerator(user)) {
+    return error(
+      403,
+      "Accès modération refusé."
+    );
+  }
 
-  const activeBans = Object.values(bans).filter(
-    isBanActive
-  );
-
-  return json(200, {
-    moderator: {
-      discordId: session.discordId,
-      username: session.username,
-    },
-
-    ads,
-
-    bans: activeBans,
-
-    logs: logs.slice(0, 200),
-
-    stats: {
-      ads: ads.length,
-      usersBanned: activeBans.length,
-      logs: logs.length,
-
-      users: [
-        ...new Set(
-          ads
-            .map((ad) => ad.authorDiscordId)
-            .filter(Boolean)
-        ),
-      ].length,
-    },
-  });
-}
-
-async function handleBan(event, body) {
-  const moderator = await requireModerator(event);
-
-  const discordId = String(body.discordId || "").trim();
+  const discordId = String(
+    body.discordId || ""
+  ).trim();
 
   if (!discordId) {
-    return json(400, {
-      error: "DISCORD_ID_REQUIRED",
-    });
+    return error(
+      400,
+      "Discord ID invalide."
+    );
   }
 
   if (discordId === MODERATOR_ID) {
-    return json(403, {
-      error: "CANNOT_BAN_MODERATOR",
-    });
+    return error(
+      403,
+      "Impossible de bannir le propriétaire de la modération."
+    );
   }
 
-  const duration = body.duration || "permanent";
+  const duration =
+    body.duration ||
+    "permanent";
 
-  const durations = {
-    "1h": 60 * 60 * 1000,
-    "24h": 24 * 60 * 60 * 1000,
-    "7d": 7 * 24 * 60 * 60 * 1000,
-    "30d": 30 * 24 * 60 * 60 * 1000,
-    permanent: null,
-  };
-
-  if (!Object.prototype.hasOwnProperty.call(durations, duration)) {
-    return json(400, {
-      error: "INVALID_DURATION",
-    });
-  }
-
-  const bans = await readData("bans", {});
+  const durationMs =
+    durationToMs(duration);
 
   const expiresAt =
-    durations[duration] === null
+    durationMs === null
       ? null
-      : new Date(
-          Date.now() + durations[duration]
-        ).toISOString();
+      : Date.now() + durationMs;
 
-  const ban = {
+  const reason = String(
+    body.reason ||
+      "Aucune raison fournie"
+  )
+    .trim()
+    .slice(0, 500);
+
+  data.bans[discordId] = {
     discordId,
-    username: body.username || "",
-    reason: String(body.reason || "").slice(0, 1000),
-    duration,
-    createdAt: now(),
+    reason,
+    duration: String(duration),
+    bannedAt: Date.now(),
     expiresAt,
-    bannedBy: moderator.discordId,
-    bannedByUsername: moderator.username,
+    moderatorDiscordId:
+      String(user.discordId),
+    moderatorUsername:
+      user.username || "",
   };
 
-  bans[discordId] = ban;
+  addModerationLog(
+    data,
+    "ban",
+    user,
+    {
+      targetDiscordId:
+        discordId,
+      duration:
+        String(duration),
+      reason,
+      expiresAt,
+    }
+  );
 
-  await writeData("bans", bans);
+  await saveData(data);
 
-  await createModerationLog({
-    moderatorId: moderator.discordId,
-    moderatorUsername: moderator.username,
-    action: "BAN",
-    targetDiscordId: discordId,
-    targetUsername: body.username || "",
-    reason: ban.reason,
-    duration,
-  });
-
-  return json(200, {
+  return ok({
     success: true,
+    ban: data.bans[discordId],
+  });
+}
+
+/* =========================================================
+   UNBAN
+========================================================= */
+
+async function unbanUser(
+  event,
+  user,
+  body,
+  data
+) {
+  if (!isModerator(user)) {
+    return error(
+      403,
+      "Accès modération refusé."
+    );
+  }
+
+  const discordId = String(
+    body.discordId || ""
+  ).trim();
+
+  if (!discordId) {
+    return error(
+      400,
+      "Discord ID invalide."
+    );
+  }
+
+  const existed =
+    !!data.bans[discordId];
+
+  delete data.bans[discordId];
+
+  addModerationLog(
+    data,
+    "unban",
+    user,
+    {
+      targetDiscordId:
+        discordId,
+    }
+  );
+
+  await saveData(data);
+
+  return ok({
+    success: true,
+    existed,
+  });
+}
+
+/* =========================================================
+   PUBLIC DATA
+========================================================= */
+
+async function publicData(
+  event,
+  user,
+  data
+) {
+  /*
+    On ne renvoie PAS les IDs des votants.
+    On fournit les compteurs et le statut
+    du vote de l'utilisateur connecté.
+  */
+
+  const voteCounts = {};
+  const voted = {};
+
+  for (const [
+    adId,
+    voters,
+  ] of Object.entries(data.votes)) {
+    const list =
+      Array.isArray(voters)
+        ? voters
+        : [];
+
+    voteCounts[adId] =
+      list.length;
+
+    if (user?.discordId) {
+      voted[adId] =
+        list.includes(
+          String(user.discordId)
+        );
+    }
+  }
+
+  return ok({
+    ads: data.ads,
+    comments: data.comments,
+    votes: voteCounts,
+    voted,
+  });
+}
+
+/* =========================================================
+   ME
+========================================================= */
+
+async function me(event) {
+  const user =
+    await getSession(event);
+
+  if (!user) {
+    return ok({
+      authenticated: false,
+      user: null,
+    });
+  }
+
+  return ok({
+    authenticated: true,
+
+    user: {
+      discordId:
+        user.discordId,
+
+      username:
+        user.username || "",
+
+      avatar:
+        user.avatar || null,
+
+      guilds:
+        Array.isArray(user.guilds)
+          ? user.guilds
+          : [],
+    },
+  });
+}
+
+/* =========================================================
+   MODERATION DATA
+========================================================= */
+
+async function moderationData(
+  event,
+  user,
+  data
+) {
+  if (!isModerator(user)) {
+    return error(
+      403,
+      "Accès modération refusé."
+    );
+  }
+
+  /*
+    Nettoyage des bans expirés.
+  */
+
+  for (const id of Object.keys(
+    data.bans
+  )) {
+    if (
+      data.bans[id].expiresAt !==
+        null &&
+      Number(
+        data.bans[id].expiresAt
+      ) <= Date.now()
+    ) {
+      delete data.bans[id];
+    }
+  }
+
+  /*
+    Création d'une liste d'utilisateurs
+    connue à partir des publications,
+    commentaires et bans.
+  */
+
+  const users = new Map();
+
+  for (const ad of data.ads) {
+    if (!ad.authorDiscordId)
+      continue;
+
+    users.set(
+      String(ad.authorDiscordId),
+      {
+        discordId:
+          String(ad.authorDiscordId),
+
+        username:
+          ad.authorUsername || "",
+
+        avatar:
+          ad.authorAvatar || null,
+      }
+    );
+  }
+
+  for (const comment of data.comments) {
+    if (!comment.discordId)
+      continue;
+
+    const id =
+      String(comment.discordId);
+
+    if (!users.has(id)) {
+      users.set(id, {
+        discordId: id,
+        username:
+          comment.username || "",
+        avatar:
+          comment.avatar || null,
+      });
+    }
+  }
+
+  for (const ban of Object.values(
+    data.bans
+  )) {
+    const id =
+      String(ban.discordId);
+
+    if (!users.has(id)) {
+      users.set(id, {
+        discordId: id,
+        username: "",
+        avatar: null,
+      });
+    }
+  }
+
+  const totalVotes =
+    Object.values(data.votes)
+      .reduce(
+        (total, voters) =>
+          total +
+          (Array.isArray(voters)
+            ? voters.length
+            : 0),
+        0
+      );
+
+  const stats = {
+    totalAds:
+      data.ads.length,
+
+    totalComments:
+      data.comments.length,
+
+    totalVotes,
+
+    totalUsers:
+      users.size,
+
+    totalBans:
+      Object.keys(data.bans).length,
+
+    totalLogs:
+      data.moderationLogs.length,
+  };
+
+  await saveData(data);
+
+  return ok({
+    ads: data.ads,
+    comments: data.comments,
+    bans: data.bans,
+    users: [...users.values()],
+    moderationLogs:
+      data.moderationLogs,
+    stats,
+  });
+}
+
+/* =========================================================
+   SINGLE BAN
+========================================================= */
+
+async function getBan(
+  event,
+  user,
+  discordId,
+  data
+) {
+  if (!isModerator(user)) {
+    return error(
+      403,
+      "Accès modération refusé."
+    );
+  }
+
+  const id = String(
+    discordId || ""
+  ).trim();
+
+  const ban =
+    data.bans[id] || null;
+
+  if (
+    ban &&
+    ban.expiresAt !== null &&
+    Number(ban.expiresAt) <= Date.now()
+  ) {
+    delete data.bans[id];
+
+    await saveData(data);
+
+    return ok({
+      ban: null,
+    });
+  }
+
+  return ok({
     ban,
   });
 }
 
-async function handleUnban(event, body) {
-  const moderator = await requireModerator(event);
+/* =========================================================
+   ACTION NORMALIZATION
+========================================================= */
 
-  const discordId = String(body.discordId || "").trim();
+function normalizeAction(action) {
+  const aliases = {
+    create_ad: "createAd",
+    update_ad: "updateAd",
+    delete_ad: "deleteAd",
 
-  if (!discordId) {
-    return json(400, {
-      error: "DISCORD_ID_REQUIRED",
-    });
-  }
+    toggle_vote: "vote",
 
-  const bans = await readData("bans", {});
+    create_comment: "addComment",
+    delete_comment: "deleteComment",
 
-  const existed = !!bans[discordId];
+    moderator_delete_ad:
+      "deleteAd",
 
-  delete bans[discordId];
+    ban: "ban",
+    unban: "unban",
 
-  await writeData("bans", bans);
+    createAd: "createAd",
+    updateAd: "updateAd",
+    deleteAd: "deleteAd",
 
-  if (existed) {
-    await createModerationLog({
-      moderatorId: moderator.discordId,
-      moderatorUsername: moderator.username,
-      action: "UNBAN",
-      targetDiscordId: discordId,
-    });
-  }
+    vote: "vote",
 
-  return json(200, {
-    success: true,
-  });
+    addComment: "addComment",
+    deleteComment:
+      "deleteComment",
+  };
+
+  return (
+    aliases[String(action)] ||
+    String(action)
+  );
 }
 
-async function handleAction(event, body, session) {
-  switch (body.action) {
+/* =========================================================
+   MAIN ACTION HANDLER
+========================================================= */
+
+async function handleAction(
+  event,
+  action,
+  user,
+  body,
+  data
+) {
+  switch (action) {
     case "createAd":
+      return createAd(
+        event,
+        user,
+        body,
+        data
+      );
+
     case "updateAd":
-      return handleCreateAd(event, body, session);
+      return updateAd(
+        event,
+        user,
+        body,
+        data
+      );
 
     case "deleteAd":
-      return handleDeleteAd(event, body, session);
+      return deleteAd(
+        event,
+        user,
+        body,
+        data
+      );
 
     case "vote":
-      return handleVote(event, body, session);
+      return vote(
+        event,
+        user,
+        body,
+        data
+      );
 
     case "addComment":
-      return handleAddComment(event, body, session);
+      return addComment(
+        event,
+        user,
+        body,
+        data
+      );
 
     case "deleteComment":
-      return handleDeleteComment(event, body, session);
+      return deleteComment(
+        event,
+        user,
+        body,
+        data
+      );
 
     case "ban":
-      return handleBan(event, body);
+      return banUser(
+        event,
+        user,
+        body,
+        data
+      );
 
     case "unban":
-      return handleUnban(event, body);
+      return unbanUser(
+        event,
+        user,
+        body,
+        data
+      );
 
     default:
-      return json(400, {
-        error: "UNKNOWN_ACTION",
-      });
+      return error(
+        400,
+        `Action inconnue : ${action}`
+      );
   }
 }
 
-exports.handler = async (event) => {
+/* =========================================================
+   NETLIFY HANDLER
+========================================================= */
+
+exports.handler = async (
+  event
+) => {
   try {
-    // Nécessaire pour certains environnements Lambda/Netlify.
+    /*
+      Important pour @netlify/blobs
+      dans une Netlify Function.
+    */
+
     try {
-      await connectLambda(event);
-    } catch {
-      // Certaines versions/environnements n'en ont pas besoin.
+      connectLambda(event);
+    } catch (e) {
+      /*
+        Certaines versions/configurations
+        n'en ont pas besoin.
+      */
     }
 
-    const method = event.httpMethod || "GET";
+    const method =
+      String(
+        event.httpMethod || "GET"
+      ).toUpperCase();
+
+    const data =
+      await getData();
+
+    /* =====================================
+       GET
+    ===================================== */
 
     if (method === "GET") {
+      const params =
+        event.queryStringParameters ||
+        {};
+
       const action =
-        event.queryStringParameters?.action || "public";
+        String(
+          params.action || "public"
+        );
 
       if (action === "public") {
-        return handlePublic();
+        const session =
+          await getSession(event);
+
+        return publicData(
+          event,
+          session,
+          data
+        );
       }
 
       if (action === "me") {
-        return handleMe(event);
+        return me(event);
       }
 
-      if (action === "moderation") {
-        return handleModeration(event);
+      const auth =
+        await requireUser(event);
+
+      if (auth.error) {
+        return auth.error;
+      }
+
+      const user =
+        auth.user;
+
+      if (
+        action === "moderation"
+      ) {
+        return moderationData(
+          event,
+          user,
+          data
+        );
       }
 
       if (action === "ban") {
-        const discordId =
-          event.queryStringParameters?.discordId;
-
-        if (!discordId) {
-          return json(400, {
-            error: "DISCORD_ID_REQUIRED",
-          });
-        }
-
-        const ban = await getBan(discordId);
-
-        return json(200, {
-          banned: !!ban,
-          ban,
-        });
+        return getBan(
+          event,
+          user,
+          params.discordId,
+          data
+        );
       }
 
-      return json(400, {
-        error: "UNKNOWN_ACTION",
-      });
+      return error(
+        400,
+        "Action GET inconnue."
+      );
     }
+
+    /* =====================================
+       POST
+    ===================================== */
 
     if (method === "POST") {
-      const body = getBody(event);
+      const body =
+        parseBody(event);
 
-      const session = await requireSession(event);
+      const rawAction =
+        body.action;
 
-      return handleAction(event, body, session);
+      const action =
+        normalizeAction(
+          rawAction
+        );
+
+      const auth =
+        await requireUser(event);
+
+      if (auth.error) {
+        return auth.error;
+      }
+
+      return handleAction(
+        event,
+        action,
+        auth.user,
+        body,
+        data
+      );
     }
 
-    return json(405, {
-      error: "METHOD_NOT_ALLOWED",
-    });
-  } catch (error) {
-    console.error("Storage error:", error);
+    return error(
+      405,
+      "Méthode non autorisée."
+    );
+  } catch (err) {
+    console.error(
+      "storage.js error:",
+      err
+    );
 
-    if (error.message === "AUTH_REQUIRED") {
-      return json(401, {
-        error: "AUTH_REQUIRED",
-      });
-    }
-
-    if (error.message === "MODERATOR_REQUIRED") {
-      return json(403, {
-        error: "MODERATOR_REQUIRED",
-      });
-    }
-
-    if (error.message === "INVALID_JSON") {
-      return json(400, {
-        error: "INVALID_JSON",
-      });
-    }
-
-    return json(500, {
-      error: "SERVER_ERROR",
-      message: error.message || "Erreur serveur.",
-    });
+    return error(
+      500,
+      "Erreur interne du serveur."
+    );
   }
 };
