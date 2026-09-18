@@ -435,6 +435,95 @@ img{
   font-weight:700;
 }
 
+
+/* ================= AUTH / MODAL FIXES ================= */
+
+.modal-overlay{
+  position:fixed;
+  inset:0;
+  z-index:9999;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  background:rgba(0,0,0,.72);
+  backdrop-filter:blur(10px);
+}
+
+.modal-card{
+  position:relative;
+  width:min(460px,100%);
+  max-height:min(720px,calc(100vh - 40px));
+  overflow:auto;
+  padding:24px;
+  border:1px solid var(--border-orange);
+  border-radius:20px;
+  background:var(--surface);
+  box-shadow:0 24px 80px rgba(0,0,0,.45);
+}
+
+.modal-title{
+  margin-bottom:18px;
+  font-size:1.15rem;
+  font-weight:700;
+}
+
+.modal-close{
+  position:absolute;
+  top:12px;
+  right:12px;
+  width:34px;
+  height:34px;
+  border:1px solid var(--border);
+  border-radius:50%;
+  background:var(--surface-2);
+  color:var(--text);
+  font-size:22px;
+  cursor:pointer;
+}
+
+.account-card{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  padding:15px;
+  margin-bottom:18px;
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:var(--surface-2);
+}
+
+.account-avatar{
+  width:52px;
+  height:52px;
+  flex:0 0 52px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+  border-radius:50%;
+  background:var(--accent-dark);
+  color:#fff;
+  font-weight:800;
+}
+
+.account-avatar img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+}
+
+.btn:disabled{
+  opacity:.45;
+  cursor:not-allowed;
+  transform:none !important;
+}
+
+@media(max-width:700px){
+  .modal-overlay{padding:12px}
+  .modal-card{padding:20px; border-radius:16px}
+}
+
 /* ================= BUTTONS ================= */
 
 .btn{
@@ -2616,8 +2705,16 @@ async function loadAll(){
         ? data.votes
         : {};
 
-    State.user =
-      data.user || null;
+    State._voted =
+      data.voted &&
+      typeof data.voted === "object"
+        ? data.voted
+        : {};
+
+    for(const [adId, count] of Object.entries(data.votes || {})){
+      const ad = State.ads.find(item => String(item.id) === String(adId));
+      if(ad) ad.votes = Number(count || 0);
+    }
 
   }catch(error){
 
@@ -2655,8 +2752,6 @@ async function refreshData(){
       ? data.votes
       : {};
 
-  State.user =
-    data.user || null;
 }
 
 /* ============================================================
@@ -2762,6 +2857,59 @@ function navItems(){
   }
 
   return items;
+}
+
+
+/* ============================================================
+   UI / AUTH
+============================================================ */
+
+function openLoginModal(){
+  window.location.href = "/auth/discord";
+}
+
+function openAccountModal(){
+  if(!State.user) return;
+
+  const old = document.getElementById("accountModal");
+  if(old) old.remove();
+
+  const modal = document.createElement("div");
+  modal.id = "accountModal";
+  modal.className = "modal-overlay";
+  modal.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <button class="modal-close" type="button" aria-label="Fermer">×</button>
+      <div class="modal-title">Compte Discord</div>
+      <div class="account-card">
+        <div class="account-avatar">
+          ${State.user.avatar
+            ? `<img src="${escapeHtml(State.user.avatar)}" alt="">`
+            : initials(State.user.username || "U")}
+        </div>
+        <div>
+          <strong>${escapeHtml(State.user.username || "Utilisateur")}</strong>
+          <div class="hint">ID : ${escapeHtml(State.user.discordId || "—")}</div>
+        </div>
+      </div>
+      <button class="btn btn-secondary" type="button" id="closeAccountBtn">Fermer</button>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const close = () => modal.remove();
+  modal.querySelector(".modal-close")?.addEventListener("click", close);
+  modal.querySelector("#closeAccountBtn")?.addEventListener("click", close);
+  modal.addEventListener("click", e => {
+    if(e.target === modal) close();
+  });
+}
+
+function render(){
+  renderNav();
+  renderAuthArea();
+  route();
 }
 
 function renderNav(){
@@ -4357,6 +4505,14 @@ async function loadModeration(){
     State.moderation =
       await apiGet("moderation");
 
+    State.moderation.stats =
+      State.moderation.stats || {};
+
+    State.moderation.logs =
+      State.moderation.logs ||
+      State.moderation.moderationLogs ||
+      [];
+
     return true;
 
   }catch(error){
@@ -4418,7 +4574,7 @@ async function viewModeration(){
         </div>
 
         <div class="number">
-          ${fmtNum(stats.ads || 0)}
+          ${fmtNum((stats.ads ?? stats.totalAds ?? 0))}
         </div>
 
       </div>
@@ -4430,7 +4586,7 @@ async function viewModeration(){
         </div>
 
         <div class="number">
-          ${fmtNum(stats.bans || 0)}
+          ${fmtNum((stats.bans ?? stats.totalBans ?? 0))}
         </div>
 
       </div>
@@ -4442,7 +4598,7 @@ async function viewModeration(){
         </div>
 
         <div class="number">
-          ${fmtNum(stats.comments || 0)}
+          ${fmtNum((stats.comments ?? stats.totalComments ?? 0))}
         </div>
 
       </div>
@@ -4454,7 +4610,7 @@ async function viewModeration(){
         </div>
 
         <div class="number">
-          ${fmtNum(stats.logs || 0)}
+          ${fmtNum((stats.logs ?? stats.totalLogs ?? 0))}
         </div>
 
       </div>
@@ -4969,28 +5125,28 @@ async function viewModerationStats(){
       <div class="stat-card">
         <div class="label">Publications</div>
         <div class="number">
-          ${fmtNum(stats.ads || 0)}
+          ${fmtNum((stats.ads ?? stats.totalAds ?? 0))}
         </div>
       </div>
 
       <div class="stat-card">
         <div class="label">Commentaires</div>
         <div class="number">
-          ${fmtNum(stats.comments || 0)}
+          ${fmtNum((stats.comments ?? stats.totalComments ?? 0))}
         </div>
       </div>
 
       <div class="stat-card">
         <div class="label">Votes</div>
         <div class="number">
-          ${fmtNum(stats.votes || 0)}
+          ${fmtNum((stats.votes ?? stats.totalVotes ?? 0))}
         </div>
       </div>
 
       <div class="stat-card">
         <div class="label">Bannissements</div>
         <div class="number">
-          ${fmtNum(stats.bans || 0)}
+          ${fmtNum((stats.bans ?? stats.totalBans ?? 0))}
         </div>
       </div>
 
@@ -5006,22 +5162,22 @@ async function viewModerationStats(){
 
         <div>
           <span>Total des pubs</span>
-          <b>${fmtNum(stats.ads || 0)}</b>
+          <b>${fmtNum((stats.ads ?? stats.totalAds ?? 0))}</b>
         </div>
 
         <div>
           <span>Total des commentaires</span>
-          <b>${fmtNum(stats.comments || 0)}</b>
+          <b>${fmtNum((stats.comments ?? stats.totalComments ?? 0))}</b>
         </div>
 
         <div>
           <span>Total des votes</span>
-          <b>${fmtNum(stats.votes || 0)}</b>
+          <b>${fmtNum((stats.votes ?? stats.totalVotes ?? 0))}</b>
         </div>
 
         <div>
           <span>Actions de modération</span>
-          <b>${fmtNum(stats.logs || 0)}</b>
+          <b>${fmtNum((stats.logs ?? stats.totalLogs ?? 0))}</b>
         </div>
 
       </div>
@@ -5046,7 +5202,9 @@ async function viewModerationLogs(){
   State._moderationTab = "logs";
 
   const logs =
-    State.moderation.logs || [];
+    State.moderation.logs ||
+    State.moderation.moderationLogs ||
+    [];
 
   document.getElementById("view").innerHTML = `
 
@@ -5251,19 +5409,19 @@ function openBanModal(discordId){
 
         <select id="banDuration">
 
-          <option value="3600000">
+          <option value="1h">
             1 heure
           </option>
 
-          <option value="86400000">
+          <option value="24h">
             24 heures
           </option>
 
-          <option value="604800000">
+          <option value="7d">
             7 jours
           </option>
 
-          <option value="2592000000">
+          <option value="30d">
             30 jours
           </option>
 
@@ -6250,6 +6408,9 @@ function injectModerationNav(){
 
 function route(){
 
+  if(document.getElementById("navlinks")) renderNav();
+  if(document.getElementById("authArea")) renderAuthArea();
+
   const hash =
     location.hash || "#/";
 
@@ -6387,11 +6548,21 @@ window.addEventListener(
 
     if(data.ads)
       State.ads =
-        data.ads;
+        data.ads.map(normalizeAd).filter(Boolean);
 
     if(data.comments)
       State.comments =
         data.comments;
+
+    State._voted =
+      data.voted && typeof data.voted === "object"
+        ? data.voted
+        : {};
+
+    for(const [adId, count] of Object.entries(data.votes || {})){
+      const ad = State.ads.find(item => String(item.id) === String(adId));
+      if(ad) ad.votes = Number(count || 0);
+    }
 
   }catch(error){
 
@@ -6458,3 +6629,8 @@ setInterval(
   },
   30000
 );
+
+})();
+</script>
+</body>
+</html>
