@@ -2,6 +2,19 @@
   functions = "netlify/functions"
   publish = "."
 
+# =========================
+# API STORAGE
+# =========================
+
+[[redirects]]
+  from = "/api/storage"
+  to = "/.netlify/functions/storage"
+  status = 200
+
+# =========================
+# DISCORD AUTH
+# =========================
+
 [[redirects]]
   from = "/auth/discord"
   to = "/.netlify/functions/discord-auth"
@@ -10,9 +23,4 @@
 [[redirects]]
   from = "/auth/discord/callback"
   to = "/.netlify/functions/discord-callback"
-  status = 200
-
-[[redirects]]
-  from = "/api/storage"
-  to = "/.netlify/functions/storage"
   status = 200
