@@ -3029,3 +3029,3423 @@ function cooldownRemaining(guildId){
     )
   );
 }
+/* ============================================================
+   CARD PUB
+============================================================ */
+
+function adCard(ad,index=0){
+
+  const voted =
+    hasVoted(ad.id);
+
+  const fresh =
+    Date.now() -
+    ad.lastBumpAt <
+    60 * 60 * 1000;
+
+  const tags =
+    (ad.tags || [])
+      .slice(0,4)
+      .map(tag => `
+        <span class="tagpill">
+          ${escapeHtml(tag)}
+        </span>
+      `)
+      .join("");
+
+  return `
+    <article
+      class="scard"
+      style="animation-delay:${Math.min(index * 35,500)}ms"
+      onclick="openAd('${escapeHtml(ad.id)}')"
+    >
+
+      <div class="head">
+
+        ${guildAvatarHtml(ad,52)}
+
+        <div style="min-width:0;flex:1">
+
+          <div class="name">
+            ${escapeHtml(ad.guildName)}
+          </div>
+
+          <div class="members">
+
+            <span class="dot"></span>
+
+            ${
+              ad.memberCount != null
+                ? `${fmtNum(ad.memberCount)} membres`
+                : "Serveur Discord"
+            }
+
+          </div>
+
+        </div>
+
+      </div>
+
+      <p class="desc">
+        ${escapeHtml(ad.description)}
+      </p>
+
+      <div class="tags">
+        ${tags}
+      </div>
+
+      <div class="foot">
+
+        <div
+          class="
+            bump-time
+            ${fresh ? "fresh" : ""}
+          "
+        >
+          ${ICONS.arrow}
+          ${timeAgo(ad.lastBumpAt)}
+        </div>
+
+        <button
+          class="
+            vote-btn
+            ${voted ? "voted" : ""}
+          "
+          onclick="
+            event.stopPropagation();
+            toggleVote('${escapeHtml(ad.id)}')
+          "
+          title="J'aime"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="${voted ? "currentColor" : "none"}"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M7 10v10H4V10h3z"/>
+            <path d="M7 10l4-7c1.3.1 2 1 2 2v4h5.5c1.1 0 1.8 1 1.5 2l-1.5 7c-.2.9-1 1.5-1.9 1.5H7"/>
+          </svg>
+
+          ${fmtNum(ad.votes)}
+        </button>
+
+      </div>
+
+    </article>
+  `;
+}
+
+
+/* ============================================================
+   HOME
+============================================================ */
+
+function viewHome(){
+
+  let ads =
+    State.ads.map(normalizeAd);
+
+  const search =
+    State._search
+      .trim()
+      .toLowerCase();
+
+  if(search){
+
+    ads =
+      ads.filter(ad => {
+
+        const text = [
+          ad.guildName,
+          ad.description,
+          ad.authorName,
+          ...(ad.tags || [])
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        return text.includes(search);
+      });
+  }
+
+  if(State._tagFilter){
+
+    ads =
+      ads.filter(ad =>
+        (ad.tags || [])
+          .includes(
+            State._tagFilter
+          )
+      );
+  }
+
+  if(State._sort === "votes"){
+
+    ads.sort(
+      (a,b) =>
+        Number(b.votes || 0) -
+        Number(a.votes || 0)
+    );
+
+  }else if(State._sort === "members"){
+
+    ads.sort(
+      (a,b) =>
+        Number(b.memberCount || 0) -
+        Number(a.memberCount || 0)
+    );
+
+  }else{
+
+    ads.sort(
+      (a,b) =>
+        Number(b.lastBumpAt || 0) -
+        Number(a.lastBumpAt || 0)
+    );
+  }
+
+  const tags =
+    TAGS.map(tag => `
+      <button
+        class="
+          chip
+          ${
+            State._tagFilter === tag
+              ? "active"
+              : ""
+          }
+        "
+        onclick="
+          setTagFilter(
+            '${escapeHtml(tag)}'
+          )
+        "
+      >
+        ${escapeHtml(tag)}
+      </button>
+    `).join("");
+
+  document.getElementById("view").innerHTML = `
+
+    <div class="hero">
+
+      <h1>
+        Propulse ton
+        <span>serveur Discord.</span>
+      </h1>
+
+      <p>
+        Découvre de nouvelles communautés,
+        publie ton serveur et donne-lui de la
+        visibilité auprès des autres membres
+        de DeZoPub.
+      </p>
+
+      <div
+        style="
+          display:flex;
+          flex-wrap:wrap;
+          gap:9px;
+          margin-top:18px;
+        "
+      >
+
+        <button
+          class="btn btn-accent"
+          onclick="go('#/publier')"
+        >
+          ${ICONS.arrow}
+          Publier mon serveur
+        </button>
+
+        ${
+          State.user
+            ? ""
+            : `
+              <button
+                class="btn btn-ghost"
+                onclick="openLoginModal()"
+              >
+                ${ICONS.discord}
+                Se connecter avec Discord
+              </button>
+            `
+        }
+
+      </div>
+
+    </div>
+
+    <div
+      style="
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+        flex-wrap:wrap;
+        margin-bottom:4px;
+      "
+    >
+
+      <h2 class="section-title">
+        Serveurs récents
+      </h2>
+
+      <span
+        style="
+          color:var(--text-dim);
+          font-size:.7rem;
+        "
+      >
+        ${ads.length} serveur${ads.length > 1 ? "s" : ""}
+      </span>
+
+    </div>
+
+    <div class="sorttabs">
+
+      <button
+        class="
+          ${State._sort === "recent" ? "active" : ""}
+        "
+        onclick="setSort('recent')"
+      >
+        Récents
+      </button>
+
+      <button
+        class="
+          ${State._sort === "votes" ? "active" : ""}
+        "
+        onclick="setSort('votes')"
+      >
+        Populaires
+      </button>
+
+      <button
+        class="
+          ${State._sort === "members" ? "active" : ""}
+        "
+        onclick="setSort('members')"
+      >
+        Membres
+      </button>
+
+    </div>
+
+    <div class="chiprow">
+
+      <button
+        class="
+          chip
+          ${!State._tagFilter ? "active" : ""}
+        "
+        onclick="setTagFilter(null)"
+      >
+        Tous
+      </button>
+
+      ${tags}
+
+    </div>
+
+    ${
+      ads.length
+        ? `
+          <div class="grid">
+            ${ads
+              .map((ad,i) =>
+                adCard(ad,i)
+              )
+              .join("")}
+          </div>
+        `
+        : `
+          <div class="empty">
+
+            <div class="big">
+              🔎
+            </div>
+
+            <h3>
+              Aucun serveur trouvé
+            </h3>
+
+            <p>
+              Essaie une autre recherche
+              ou publie ton propre serveur.
+            </p>
+
+          </div>
+        `
+    }
+  `;
+}
+
+
+/* ============================================================
+   DETAIL PUB
+============================================================ */
+
+function viewDetail(id){
+
+  const ad =
+    State.ads.find(
+      item =>
+        String(item.id) ===
+        String(id)
+    );
+
+  if(!ad){
+
+    document.getElementById("view").innerHTML = `
+      <div class="empty">
+        <div class="big">404</div>
+        <h3>Publication introuvable</h3>
+        <p>Cette publication n'existe plus.</p>
+      </div>
+    `;
+
+    return;
+  }
+
+  const isMine =
+    !!(
+      State.user &&
+      ad.authorDiscordId ===
+      State.user.discordId
+    );
+
+  const comments =
+    State.comments.filter(
+      comment =>
+        String(comment.adId) ===
+        String(ad.id)
+    );
+
+  const tags =
+    (ad.tags || [])
+      .map(tag => `
+        <span class="tagpill">
+          ${escapeHtml(tag)}
+        </span>
+      `)
+      .join("");
+
+  document.getElementById("view").innerHTML = `
+
+    <div class="detail-wrap">
+
+      <button
+        class="btn btn-ghost"
+        onclick="go('#/')"
+        style="margin-bottom:15px"
+      >
+        ← Retour
+      </button>
+
+      <div
+        class="detail-banner"
+        style="
+          background:
+            radial-gradient(
+              circle at 70% 20%,
+              rgba(255,138,0,.35),
+              transparent 45%
+            ),
+            linear-gradient(
+              135deg,
+              #1b1208,
+              #0e1016
+            );
+        "
+      ></div>
+
+      <div class="detail-head">
+
+        ${guildAvatarHtml(ad,88)}
+
+        <div style="min-width:0">
+
+          <h2>
+            ${escapeHtml(ad.guildName)}
+          </h2>
+
+          <div class="sub">
+            ${
+              ad.memberCount != null
+                ? `${fmtNum(ad.memberCount)} membres`
+                : "Serveur Discord"
+            }
+            ·
+            bumpé ${timeAgo(ad.lastBumpAt)}
+          </div>
+
+        </div>
+
+      </div>
+
+      <div class="detail-actions">
+
+        ${
+          ad.inviteLink
+            ? `
+              <a
+                class="btn btn-accent"
+                href="${escapeHtml(ad.inviteLink)}"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Rejoindre le serveur ↗
+              </a>
+            `
+            : ""
+        }
+
+        <button
+          class="
+            btn
+            ${hasVoted(ad.id)
+              ? "btn-warning"
+              : "btn-ghost"}
+          "
+          onclick="
+            toggleVote(
+              '${escapeHtml(ad.id)}'
+            )
+          "
+        >
+          👍
+          ${fmtNum(ad.votes)}
+        </button>
+
+        ${
+          isMine
+            ? `
+              <button
+                class="btn btn-ghost"
+                onclick="
+                  editAd(
+                    '${escapeHtml(ad.id)}'
+                  )
+                "
+              >
+                Modifier
+              </button>
+
+              <button
+                class="btn btn-danger"
+                onclick="
+                  deleteAd(
+                    '${escapeHtml(ad.id)}'
+                  )
+                "
+              >
+                Supprimer
+              </button>
+            `
+            : ""
+        }
+
+      </div>
+
+      <div class="detail-tags">
+        ${tags}
+      </div>
+
+      <div class="stat-inline">
+
+        <div class="s">
+          <b>${fmtNum(ad.votes)}</b>
+          <span>likes</span>
+        </div>
+
+        <div class="s">
+          <b>${fmtNum(ad.bumpCount)}</b>
+          <span>bumps</span>
+        </div>
+
+        ${
+          ad.memberCount != null
+            ? `
+              <div class="s">
+                <b>
+                  ${fmtNum(ad.memberCount)}
+                </b>
+                <span>membres</span>
+              </div>
+            `
+            : ""
+        }
+
+      </div>
+
+      <div class="desc-box">
+        ${escapeHtml(ad.description)}
+      </div>
+
+      ${
+        State.user
+          ? `
+            <div class="comment-box">
+
+              <img
+                src="${escapeHtml(
+                  State.user.avatar || ""
+                )}"
+                onerror="
+                  this.style.display='none'
+                "
+              >
+
+              <div class="field-wrap">
+
+                <textarea
+                  id="commentInput"
+                  rows="2"
+                  maxlength="1000"
+                  placeholder="Écrire un commentaire…"
+                ></textarea>
+
+                <div class="actions">
+
+                  <button
+                    class="btn btn-accent"
+                    onclick="
+                      addComment(
+                        '${escapeHtml(ad.id)}'
+                      )
+                    "
+                  >
+                    Commenter
+                  </button>
+
+                </div>
+
+              </div>
+
+            </div>
+          `
+          : `
+            <div class="no-channel-notice">
+
+              Connecte-toi avec Discord
+              pour commenter.
+
+              <button
+                class="btn btn-discord"
+                onclick="openLoginModal()"
+              >
+                ${ICONS.discord}
+                Connexion
+              </button>
+
+            </div>
+          `
+      }
+
+      <div class="comments-head">
+        Commentaires
+        (${comments.length})
+      </div>
+
+      <div>
+
+        ${
+          comments.length
+            ? comments
+                .sort(
+                  (a,b) =>
+                    Number(a.createdAt || 0) -
+                    Number(b.createdAt || 0)
+                )
+                .map(comment =>
+                  commentHtml(
+                    comment,
+                    ad.id
+                  )
+                )
+                .join("")
+            : `
+              <div
+                style="
+                  color:var(--text-dim);
+                  font-size:.78rem;
+                  padding:10px 0 30px;
+                "
+              >
+                Aucun commentaire pour le moment.
+              </div>
+            `
+        }
+
+      </div>
+
+    </div>
+  `;
+}
+
+
+function commentHtml(comment,adId){
+
+  const mine =
+    State.user &&
+    comment.authorDiscordId ===
+    State.user.discordId;
+
+  return `
+    <div class="comment-item">
+
+      <img
+        src="${escapeHtml(
+          comment.avatar || ""
+        )}"
+        onerror="
+          this.style.display='none'
+        "
+      >
+
+      <div style="min-width:0">
+
+        <div>
+
+          <span class="c-name">
+            ${escapeHtml(
+              comment.authorName ||
+              "Utilisateur"
+            )}
+          </span>
+
+          <span class="c-time">
+            ${timeAgo(
+              comment.createdAt
+            )}
+          </span>
+
+        </div>
+
+        <div class="c-text">
+          ${escapeHtml(
+            comment.text
+          )}
+        </div>
+
+        ${
+          mine
+            ? `
+              <button
+                class="c-del"
+                onclick="
+                  deleteComment(
+                    '${escapeHtml(
+                      comment.id
+                    )}',
+                    '${escapeHtml(
+                      adId
+                    )}'
+                  )
+                "
+              >
+                Supprimer
+              </button>
+            `
+            : ""
+        }
+
+      </div>
+
+    </div>
+  `;
+}
+
+
+/* ============================================================
+   PUBLISH
+============================================================ */
+
+function viewPublish(){
+
+  if(!State.user){
+
+    document.getElementById("view").innerHTML = `
+
+      <div class="panel">
+
+        <h3>
+          Publier ton serveur
+        </h3>
+
+        <p class="hint">
+          Connecte-toi avec Discord pour
+          publier une annonce.
+        </p>
+
+        <button
+          class="btn btn-discord"
+          onclick="openLoginModal()"
+        >
+          ${ICONS.discord}
+          Se connecter avec Discord
+        </button>
+
+      </div>
+    `;
+
+    return;
+  }
+
+  const guilds =
+    Array.isArray(State.user.guilds)
+      ? State.user.guilds
+      : [];
+
+  if(!guilds.length){
+
+    document.getElementById("view").innerHTML = `
+
+      <div class="panel">
+
+        <h3>
+          Aucun serveur disponible
+        </h3>
+
+        <p class="hint">
+          Ton compte Discord ne possède
+          actuellement aucun serveur
+          que tu peux gérer.
+        </p>
+
+      </div>
+    `;
+
+    return;
+  }
+
+  const selected =
+    State._selectedGuild;
+
+  const selectedGuild =
+    guilds.find(
+      guild =>
+        String(guild.id) ===
+        String(selected)
+    );
+
+  const existing =
+    selectedGuild
+      ? myGuildAds(selectedGuild.id)
+      : null;
+
+  const remaining =
+    selectedGuild
+      ? cooldownRemaining(
+          selectedGuild.id
+        )
+      : 0;
+
+  document.getElementById("view").innerHTML = `
+
+    <div class="panel full">
+
+      <h3>
+        Publier un serveur
+      </h3>
+
+      <p class="hint">
+        Sélectionne un serveur Discord
+        que tu gères.
+      </p>
+
+      <div class="guild-pick">
+
+        ${
+          guilds.map(guild => {
+
+            const active =
+              String(
+                selected
+              ) ===
+              String(guild.id);
+
+            return `
+              <div
+                class="
+                  guild-opt
+                  ${active ? "selected" : ""}
+                "
+                onclick="
+                  selectGuild(
+                    '${escapeHtml(guild.id)}'
+                  )
+                "
+              >
+
+                ${
+                  guild.icon
+                    ? `
+                      <img
+                        src="${escapeHtml(
+                          guild.icon
+                        )}"
+                        onerror="
+                          this.style.display='none'
+                        "
+                      >
+                    `
+                    : `
+                      <div
+                        style="
+                          width:34px;
+                          height:34px;
+                          border-radius:50%;
+                          display:flex;
+                          align-items:center;
+                          justify-content:center;
+                          background:${colorFromString(
+                            guild.name
+                          )};
+                          font-size:.65rem;
+                          font-weight:800;
+                        "
+                      >
+                        ${initials(
+                          guild.name
+                        )}
+                      </div>
+                    `
+                }
+
+                <div class="n">
+                  ${escapeHtml(guild.name)}
+                </div>
+
+                ${
+                  guild.owner
+                    ? `
+                      <span class="own">
+                        OWNER
+                      </span>
+                    `
+                    : ""
+                }
+
+              </div>
+            `;
+
+          }).join("")
+        }
+
+      </div>
+
+    </div>
+
+    ${
+      selectedGuild
+        ? `
+
+          ${
+            remaining > 0
+              ? `
+                <div class="cooldown-box">
+
+                  ⏱️
+
+                  Ce serveur pourra être
+                  rebump dans
+                  <b>
+                    ${fmtDuration(remaining)}
+                  </b>.
+
+                </div>
+              `
+              : ""
+          }
+
+          <div class="panel">
+
+            <h3>
+              ${existing ? "Modifier la publication" : "Nouvelle publication"}
+            </h3>
+
+            <p class="hint">
+              ${
+                existing
+                  ? "Modifie les informations de ta publication."
+                  : "Présente ton serveur aux membres de DeZoPub."
+              }
+            </p>
+
+            <div class="field">
+
+              <label>
+                Description
+              </label>
+
+              <textarea
+                id="pubDescription"
+                maxlength="1000"
+                placeholder="Présente ton serveur…"
+              >${escapeHtml(
+                existing
+                  ? existing.description
+                  : ""
+              )}</textarea>
+
+            </div>
+
+            <div class="field">
+
+              <label>
+                Lien d'invitation Discord
+              </label>
+
+              <input
+                id="pubInvite"
+                type="url"
+                placeholder="https://discord.gg/..."
+                value="${escapeHtml(
+                  existing
+                    ? existing.inviteLink
+                    : ""
+                )}"
+              >
+
+            </div>
+
+            <div class="field">
+
+              <label>
+                Nombre de membres
+              </label>
+
+              <input
+                id="pubMembers"
+                type="number"
+                min="0"
+                max="999999999"
+                placeholder="Ex : 250"
+                value="${
+                  existing &&
+                  existing.memberCount != null
+                    ? escapeHtml(
+                        existing.memberCount
+                      )
+                    : ""
+                }"
+              >
+
+            </div>
+
+            <div class="field">
+
+              <label>
+                Catégories
+              </label>
+
+              <div
+                class="tagselect"
+                id="pubTags"
+              >
+
+                ${TAGS.map(tag => {
+
+                  const checked =
+                    existing &&
+                    Array.isArray(
+                      existing.tags
+                    ) &&
+                    existing.tags.includes(
+                      tag
+                    );
+
+                  return `
+                    <button
+                      type="button"
+                      class="
+                        chip
+                        ${
+                          checked
+                            ? "active"
+                            : ""
+                        }
+                      "
+                      onclick="
+                        togglePublishTag(
+                          this,
+                          '${escapeHtml(tag)}'
+                        )
+                      "
+                    >
+                      ${escapeHtml(tag)}
+                    </button>
+                  `;
+
+                }).join("")}
+
+              </div>
+
+            </div>
+
+            <div
+              style="
+                display:flex;
+                justify-content:flex-end;
+                gap:8px;
+              "
+            >
+
+              <button
+                class="btn btn-ghost"
+                onclick="go('#/')"
+              >
+                Annuler
+              </button>
+
+              <button
+                class="btn btn-accent"
+                id="savePubBtn"
+                onclick="
+                  savePublication(
+                    '${escapeHtml(
+                      selectedGuild.id
+                    )}',
+                    ${
+                      existing
+                        ? `'${escapeHtml(
+                            existing.id
+                          )}'`
+                        : "null"
+                    }
+                  )
+                "
+                ${
+                  remaining > 0 &&
+                  !existing
+                    ? "disabled"
+                    : ""
+                }
+              >
+                ${
+                  existing
+                    ? "Enregistrer"
+                    : "Publier"
+                }
+              </button>
+
+            </div>
+
+          </div>
+
+        `
+        : `
+          <div class="empty">
+
+            <div class="big">
+              📢
+            </div>
+
+            <h3>
+              Sélectionne un serveur
+            </h3>
+
+            <p>
+              Choisis un serveur ci-dessus
+              pour continuer.
+            </p>
+
+          </div>
+        `
+    }
+  `;
+}
+
+
+/* ============================================================
+   MES PUBS
+============================================================ */
+
+function viewMyAds(){
+
+  if(!State.user){
+
+    go("#/");
+
+    return;
+  }
+
+  const ads =
+    State.ads.filter(
+      ad =>
+        ad.authorDiscordId ===
+        State.user.discordId
+    );
+
+  document.getElementById("view").innerHTML = `
+
+    <div
+      style="
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+        flex-wrap:wrap;
+        margin-bottom:18px;
+      "
+    >
+
+      <div>
+
+        <h2
+          class="section-title"
+          style="margin-bottom:4px"
+        >
+          Mes publications
+        </h2>
+
+        <div
+          style="
+            color:var(--text-dim);
+            font-size:.72rem;
+          "
+        >
+          ${ads.length}
+          publication${ads.length > 1 ? "s" : ""}
+        </div>
+
+      </div>
+
+      <button
+        class="btn btn-accent"
+        onclick="go('#/publier')"
+      >
+        + Publier
+      </button>
+
+    </div>
+
+    <div class="panel full">
+
+      ${
+        ads.length
+          ? ads.map(ad => {
+
+              const remaining =
+                cooldownRemaining(
+                  ad.guildId
+                );
+
+              return `
+                <div class="manage-row">
+
+                  ${guildAvatarHtml(
+                    ad,
+                    44
+                  )}
+
+                  <div class="info">
+
+                    <div class="t">
+                      ${escapeHtml(
+                        ad.guildName
+                      )}
+                    </div>
+
+                    <div class="s">
+                      Bumpé
+                      ${timeAgo(
+                        ad.lastBumpAt
+                      )}
+                      ·
+                      ${fmtNum(
+                        ad.votes
+                      )} likes
+                    </div>
+
+                  </div>
+
+                  <span
+                    class="
+                      cd
+                      ${
+                        remaining
+                          ? "wait"
+                          : "ready"
+                      }
+                    "
+                  >
+                    ${
+                      remaining
+                        ? `⏱ ${fmtDuration(
+                            remaining
+                          )}`
+                        : "● BUMP"
+                    }
+                  </span>
+
+                  <button
+                    class="btn btn-ghost"
+                    onclick="
+                      event.stopPropagation();
+                      editAd(
+                        '${escapeHtml(
+                          ad.id
+                        )}'
+                      )
+                    "
+                  >
+                    Modifier
+                  </button>
+
+                  <button
+                    class="btn btn-danger"
+                    onclick="
+                      event.stopPropagation();
+                      deleteAd(
+                        '${escapeHtml(
+                          ad.id
+                        )}'
+                      )
+                    "
+                  >
+                    Supprimer
+                  </button>
+
+                </div>
+              `;
+
+            }).join("")
+          : `
+            <div class="empty">
+              <div class="big">📢</div>
+              <h3>Aucune publication</h3>
+              <p>
+                Publie ton premier serveur Discord.
+              </p>
+            </div>
+          `
+      }
+
+    </div>
+  `;
+}
+
+
+/* ============================================================
+   MODERATION — DASHBOARD
+============================================================ */
+
+async function loadModeration(){
+
+  if(
+    !State.user ||
+    State.user.discordId !==
+      MODERATOR_ID
+  ){
+
+    toast(
+      "Accès modération refusé"
+    );
+
+    go("#/");
+
+    return false;
+  }
+
+  try{
+
+    State.moderation =
+      await apiGet("moderation");
+
+    return true;
+
+  }catch(error){
+
+    console.error(error);
+
+    toast(
+      error.message ||
+      "Erreur modération"
+    );
+
+    return false;
+  }
+}
+
+
+async function viewModeration(){
+
+  const allowed =
+    await loadModeration();
+
+  if(!allowed)
+    return;
+
+  const mod =
+    State.moderation || {};
+
+  const stats =
+    mod.stats || {};
+
+  document.getElementById("view").innerHTML = `
+
+    <div class="mod-header">
+
+      <div>
+
+        <h2>
+          Modération
+        </h2>
+
+        <p>
+          Gestion globale de DeZoPub.
+        </p>
+
+      </div>
+
+      <span class="mod-badge">
+        🛡️ ADMIN
+      </span>
+
+    </div>
+
+    <div class="stats-grid">
+
+      <div class="stat-card">
+
+        <div class="label">
+          Publications
+        </div>
+
+        <div class="number">
+          ${fmtNum(stats.ads || 0)}
+        </div>
+
+      </div>
+
+      <div class="stat-card">
+
+        <div class="label">
+          Utilisateurs bannis
+        </div>
+
+        <div class="number">
+          ${fmtNum(stats.bans || 0)}
+        </div>
+
+      </div>
+
+      <div class="stat-card">
+
+        <div class="label">
+          Commentaires
+        </div>
+
+        <div class="number">
+          ${fmtNum(stats.comments || 0)}
+        </div>
+
+      </div>
+
+      <div class="stat-card">
+
+        <div class="label">
+          Actions modération
+        </div>
+
+        <div class="number">
+          ${fmtNum(stats.logs || 0)}
+        </div>
+
+      </div>
+
+    </div>
+
+    <div class="panel full">
+
+      <div class="mod-tabs">
+
+        <button
+          class="${
+            State._moderationTab === "ads"
+              ? "active"
+              : ""
+          }"
+          onclick="
+            State._moderationTab='ads';
+            go('#/moderation/pubs')
+          "
+        >
+          📢 Publications
+        </button>
+
+        <button
+          class="${
+            State._moderationTab === "bans"
+              ? "active"
+              : ""
+          }"
+          onclick="
+            State._moderationTab='bans';
+            go('#/moderation/bans')
+          "
+        >
+          🚫 Bannissements
+        </button>
+
+        <button
+          class="${
+            State._moderationTab === "stats"
+              ? "active"
+              : ""
+          }"
+          onclick="
+            State._moderationTab='stats';
+            go('#/moderation/stats')
+          "
+        >
+          📊 Statistiques
+        </button>
+
+        <button
+          class="${
+            State._moderationTab === "logs"
+              ? "active"
+              : ""
+          }"
+          onclick="
+            State._moderationTab='logs';
+            go('#/moderation/logs')
+          "
+        >
+          📝 Journal
+        </button>
+
+      </div>
+
+      <p
+        class="hint"
+        style="margin-bottom:0"
+      >
+        Utilise les sections de modération
+        pour gérer les publications et les
+        utilisateurs.
+      </p>
+
+    </div>
+  `;
+}
+
+
+/* ============================================================
+   MODERATION — ADS
+============================================================ */
+
+async function viewModerationAds(){
+
+  const allowed =
+    await loadModeration();
+
+  if(!allowed)
+    return;
+
+  State._moderationTab =
+    "ads";
+
+  const ads =
+    State.moderation.ads || [];
+
+  const search =
+    State._moderationSearch
+      .trim()
+      .toLowerCase();
+
+  const filtered =
+    ads.filter(ad => {
+
+      if(!search)
+        return true;
+
+      return [
+        ad.guildName,
+        ad.authorName,
+        ad.authorDiscordId,
+        ad.description
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(search);
+    });
+
+  document.getElementById("view").innerHTML = `
+
+    <div class="mod-header">
+
+      <div>
+        <h2>
+          Toutes les pubs
+        </h2>
+
+        <p>
+          Gestion des publications de tous les utilisateurs.
+        </p>
+      </div>
+
+      <span class="mod-badge">
+        ${filtered.length}
+      </span>
+
+    </div>
+
+    <div class="mod-toolbar">
+
+      <input
+        id="modSearch"
+        value="${escapeHtml(
+          State._moderationSearch
+        )}"
+        placeholder="Rechercher un serveur, un utilisateur ou un ID…"
+        oninput="
+          State._moderationSearch=this.value;
+          renderModerationAdsList();
+        "
+      >
+
+      <button
+        class="btn btn-ghost"
+        onclick="
+          State._moderationSearch='';
+          render();
+        "
+      >
+        Réinitialiser
+      </button>
+
+    </div>
+
+    <div
+      class="panel full"
+      id="moderationAdsList"
+    >
+      ${renderModerationAdsRows(filtered)}
+    </div>
+  `;
+}
+
+
+function renderModerationAdsRows(ads){
+
+  if(!ads.length){
+
+    return `
+      <div class="empty">
+        <div class="big">🔎</div>
+        <h3>Aucune publication</h3>
+        <p>
+          Aucun résultat ne correspond
+          à ta recherche.
+        </p>
+      </div>
+    `;
+  }
+
+  return ads.map(ad => `
+
+    <div class="mod-ad">
+
+      ${guildAvatarHtml(
+        ad,
+        45
+      )}
+
+      <div class="info">
+
+        <div class="title">
+          ${escapeHtml(
+            ad.guildName
+          )}
+        </div>
+
+        <div class="meta">
+          Créateur :
+          ${escapeHtml(
+            ad.authorName ||
+            "Inconnu"
+          )}
+          · ID :
+          <span style="font-family:monospace">
+            ${escapeHtml(
+              ad.authorDiscordId ||
+              "inconnu"
+            )}
+          </span>
+          ·
+          ${timeAgo(
+            ad.createdAt
+          )}
+        </div>
+
+      </div>
+
+      <div class="actions">
+
+        <button
+          class="btn btn-ghost"
+          onclick="
+            openAd(
+              '${escapeHtml(ad.id)}'
+            )
+          "
+        >
+          Voir
+        </button>
+
+        <button
+          class="btn btn-warning"
+          onclick="
+            openBanModal(
+              '${escapeHtml(
+                ad.authorDiscordId
+              )}'
+            )
+          "
+        >
+          Bannir
+        </button>
+
+        <button
+          class="btn btn-danger"
+          onclick="
+            moderatorDeleteAd(
+              '${escapeHtml(ad.id)}'
+            )
+          "
+        >
+          Supprimer
+        </button>
+
+      </div>
+
+    </div>
+
+  `).join("");
+}
+
+
+function renderModerationAdsList(){
+
+  const container =
+    document.getElementById(
+      "moderationAdsList"
+    );
+
+  if(!container)
+    return;
+
+  const ads =
+    State.moderation &&
+    State.moderation.ads
+      ? State.moderation.ads
+      : [];
+
+  const search =
+    State._moderationSearch
+      .trim()
+      .toLowerCase();
+
+  const filtered =
+    ads.filter(ad => {
+
+      if(!search)
+        return true;
+
+      return [
+        ad.guildName,
+        ad.authorName,
+        ad.authorDiscordId,
+        ad.description
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(search);
+    });
+
+  container.innerHTML =
+    renderModerationAdsRows(
+      filtered
+    );
+}
+
+
+/* ============================================================
+   MODERATION — BANS
+============================================================ */
+
+async function viewModerationBans(){
+
+  const allowed =
+    await loadModeration();
+
+  if(!allowed)
+    return;
+
+  State._moderationTab =
+    "bans";
+
+  const bans =
+    State.moderation.bans || [];
+
+  document.getElementById("view").innerHTML = `
+
+    <div class="mod-header">
+
+      <div>
+
+        <h2>
+          Utilisateurs bannis
+        </h2>
+
+        <p>
+          Consulte et gère les restrictions
+          de publication.
+        </p>
+
+      </div>
+
+      <span class="mod-badge">
+        ${bans.length}
+      </span>
+
+    </div>
+
+    <div class="panel full">
+
+      ${
+        bans.length
+          ? bans
+              .map(renderBanRow)
+              .join("")
+          : `
+            <div class="empty">
+              <div class="big">🛡️</div>
+              <h3>Aucun utilisateur banni</h3>
+              <p>
+                Aucun bannissement actif ou enregistré.
+              </p>
+            </div>
+          `
+      }
+
+    </div>
+  `;
+}
+
+
+function renderBanRow(ban){
+
+  const permanent =
+    !ban.expiresAt;
+
+  const remaining =
+    permanent
+      ? null
+      : Math.max(
+          0,
+          Number(ban.expiresAt) -
+          Date.now()
+        );
+
+  const expired =
+    !permanent &&
+    remaining <= 0;
+
+  return `
+    <div class="ban-card">
+
+      <div
+        class="ban-status"
+        style="${
+          expired
+            ? "color:var(--good);background:rgba(87,242,135,.08)"
+            : ""
+        }"
+      >
+        ${
+          expired
+            ? "EXPIRÉ"
+            : permanent
+              ? "PERMANENT"
+              : "ACTIF"
+        }
+      </div>
+
+      <div class="ban-info">
+
+        <div class="id">
+          ${escapeHtml(
+            ban.discordId
+          )}
+        </div>
+
+        <div class="reason">
+          ${
+            escapeHtml(
+              ban.reason ||
+              "Aucune raison"
+            )
+          }
+
+          ·
+
+          ${
+            permanent
+              ? "Permanent"
+              : expired
+                ? "Terminé"
+                : `reste ${fmtDuration(
+                    remaining
+                  )}`
+          }
+        </div>
+
+      </div>
+
+      ${
+        !expired
+          ? `
+            <button
+              class="btn btn-ghost"
+              onclick="
+                unbanUser(
+                  '${escapeHtml(
+                    ban.discordId
+                  )}'
+                )
+              "
+            >
+              Débannir
+            </button>
+          `
+          : ""
+      }
+
+    </div>
+  `;
+}
+/* ============================================================
+   MODERATION — STATS
+============================================================ */
+
+async function viewModerationStats(){
+
+  const allowed =
+    await loadModeration();
+
+  if(!allowed)
+    return;
+
+  State._moderationTab = "stats";
+
+  const stats =
+    State.moderation.stats || {};
+
+  document.getElementById("view").innerHTML = `
+
+    <div class="mod-header">
+
+      <div>
+        <h2>Statistiques</h2>
+        <p>Vue globale de l'activité de DeZoPub.</p>
+      </div>
+
+      <span class="mod-badge">
+        📊 LIVE
+      </span>
+
+    </div>
+
+    <div class="stats-grid">
+
+      <div class="stat-card">
+        <div class="label">Publications</div>
+        <div class="number">
+          ${fmtNum(stats.ads || 0)}
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="label">Commentaires</div>
+        <div class="number">
+          ${fmtNum(stats.comments || 0)}
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="label">Votes</div>
+        <div class="number">
+          ${fmtNum(stats.votes || 0)}
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="label">Bannissements</div>
+        <div class="number">
+          ${fmtNum(stats.bans || 0)}
+        </div>
+      </div>
+
+    </div>
+
+    <div class="panel full">
+
+      <h3>
+        Informations
+      </h3>
+
+      <div class="mod-info-grid">
+
+        <div>
+          <span>Total des pubs</span>
+          <b>${fmtNum(stats.ads || 0)}</b>
+        </div>
+
+        <div>
+          <span>Total des commentaires</span>
+          <b>${fmtNum(stats.comments || 0)}</b>
+        </div>
+
+        <div>
+          <span>Total des votes</span>
+          <b>${fmtNum(stats.votes || 0)}</b>
+        </div>
+
+        <div>
+          <span>Actions de modération</span>
+          <b>${fmtNum(stats.logs || 0)}</b>
+        </div>
+
+      </div>
+
+    </div>
+  `;
+}
+
+
+/* ============================================================
+   MODERATION — LOGS
+============================================================ */
+
+async function viewModerationLogs(){
+
+  const allowed =
+    await loadModeration();
+
+  if(!allowed)
+    return;
+
+  State._moderationTab = "logs";
+
+  const logs =
+    State.moderation.logs || [];
+
+  document.getElementById("view").innerHTML = `
+
+    <div class="mod-header">
+
+      <div>
+        <h2>Journal de modération</h2>
+        <p>
+          Historique des actions effectuées
+          par la modération.
+        </p>
+      </div>
+
+      <span class="mod-badge">
+        ${logs.length}
+      </span>
+
+    </div>
+
+    <div class="panel full">
+
+      ${
+        logs.length
+          ? logs
+              .slice()
+              .reverse()
+              .map(log => `
+
+                <div class="log-row">
+
+                  <div class="log-icon">
+                    ${
+                      log.action === "ban"
+                        ? "🚫"
+                        : log.action === "unban"
+                          ? "🔓"
+                          : log.action === "delete_ad"
+                            ? "🗑️"
+                            : "🛡️"
+                    }
+                  </div>
+
+                  <div class="log-info">
+
+                    <div class="log-title">
+                      ${escapeHtml(
+                        log.actionLabel ||
+                        log.action ||
+                        "Action"
+                      )}
+                    </div>
+
+                    <div class="log-meta">
+
+                      ${
+                        log.targetDiscordId
+                          ? `
+                            ID :
+                            <code>
+                              ${escapeHtml(
+                                log.targetDiscordId
+                              )}
+                            </code>
+                          `
+                          : ""
+                      }
+
+                      ${
+                        log.adId
+                          ? `
+                            · Pub :
+                            <code>
+                              ${escapeHtml(
+                                log.adId
+                              )}
+                            </code>
+                          `
+                          : ""
+                      }
+
+                      ·
+
+                      ${timeAgo(
+                        log.createdAt
+                      )}
+
+                    </div>
+
+                    ${
+                      log.reason
+                        ? `
+                          <div class="log-reason">
+                            ${escapeHtml(
+                              log.reason
+                            )}
+                          </div>
+                        `
+                        : ""
+                    }
+
+                  </div>
+
+                </div>
+
+              `)
+              .join("")
+          : `
+              <div class="empty">
+
+                <div class="big">
+                  📝
+                </div>
+
+                <h3>
+                  Aucun journal
+                </h3>
+
+                <p>
+                  Les actions de modération
+                  apparaîtront ici.
+                </p>
+
+              </div>
+          `
+      }
+
+    </div>
+  `;
+}
+
+
+/* ============================================================
+   BAN MODAL
+============================================================ */
+
+function openBanModal(discordId){
+
+  if(!State.user)
+    return;
+
+  if(
+    State.user.discordId !==
+    MODERATOR_ID
+  ){
+
+    toast("Accès refusé");
+
+    return;
+  }
+
+  const old =
+    document.getElementById(
+      "banModal"
+    );
+
+  if(old)
+    old.remove();
+
+  const modal =
+    document.createElement("div");
+
+  modal.id = "banModal";
+
+  modal.className =
+    "modal-overlay";
+
+  modal.innerHTML = `
+
+    <div class="modal-card">
+
+      <button
+        class="modal-close"
+        onclick="
+          document.getElementById(
+            'banModal'
+          ).remove()
+        "
+      >
+        ×
+      </button>
+
+      <div class="modal-icon">
+        🚫
+      </div>
+
+      <h3>
+        Bannir un utilisateur
+      </h3>
+
+      <p class="hint">
+        ID Discord :
+        <code>
+          ${escapeHtml(discordId)}
+        </code>
+      </p>
+
+      <div class="field">
+
+        <label>
+          Durée
+        </label>
+
+        <select id="banDuration">
+
+          <option value="3600000">
+            1 heure
+          </option>
+
+          <option value="86400000">
+            24 heures
+          </option>
+
+          <option value="604800000">
+            7 jours
+          </option>
+
+          <option value="2592000000">
+            30 jours
+          </option>
+
+          <option value="permanent">
+            Permanent
+          </option>
+
+        </select>
+
+      </div>
+
+      <div class="field">
+
+        <label>
+          Raison
+        </label>
+
+        <textarea
+          id="banReason"
+          maxlength="500"
+          rows="4"
+          placeholder="Raison du bannissement…"
+        ></textarea>
+
+      </div>
+
+      <div class="modal-actions">
+
+        <button
+          class="btn btn-ghost"
+          onclick="
+            document.getElementById(
+              'banModal'
+            ).remove()
+          "
+        >
+          Annuler
+        </button>
+
+        <button
+          class="btn btn-danger"
+          onclick="
+            confirmBan(
+              '${escapeHtml(discordId)}'
+            )
+          "
+        >
+          Confirmer le bannissement
+        </button>
+
+      </div>
+
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+}
+
+
+async function confirmBan(discordId){
+
+  const duration =
+    document.getElementById(
+      "banDuration"
+    )?.value;
+
+  const reason =
+    document.getElementById(
+      "banReason"
+    )?.value
+    ?.trim();
+
+  try{
+
+    await apiPost(
+      "ban",
+      {
+        discordId,
+        duration,
+        reason
+      }
+    );
+
+    document.getElementById(
+      "banModal"
+    )?.remove();
+
+    toast(
+      "Utilisateur banni ✓"
+    );
+
+    await loadModeration();
+
+    render();
+
+  }catch(error){
+
+    toast(
+      error.message ||
+      "Impossible de bannir cet utilisateur"
+    );
+  }
+}
+
+
+async function unbanUser(discordId){
+
+  if(
+    !confirm(
+      "Voulez-vous vraiment débannir cet utilisateur ?"
+    )
+  ){
+    return;
+  }
+
+  try{
+
+    await apiPost(
+      "unban",
+      {
+        discordId
+      }
+    );
+
+    toast(
+      "Utilisateur débanni ✓"
+    );
+
+    await loadModeration();
+
+    render();
+
+  }catch(error){
+
+    toast(
+      error.message ||
+      "Impossible de débannir cet utilisateur"
+    );
+  }
+}
+
+
+async function moderatorDeleteAd(id){
+
+  if(
+    !confirm(
+      "Supprimer définitivement cette publication ?"
+    )
+  ){
+    return;
+  }
+
+  try{
+
+    await apiPost(
+      "moderator_delete_ad",
+      {
+        id
+      }
+    );
+
+    State.ads =
+      State.ads.filter(
+        ad =>
+          String(ad.id) !==
+          String(id)
+      );
+
+    toast(
+      "Publication supprimée ✓"
+    );
+
+    await loadModeration();
+
+    render();
+
+  }catch(error){
+
+    toast(
+      error.message ||
+      "Impossible de supprimer la publication"
+    );
+  }
+}
+
+
+/* ============================================================
+   API
+============================================================ */
+
+async function apiGet(action){
+
+  const response =
+    await fetch(
+      `/api/storage?action=${encodeURIComponent(
+        action
+      )}`,
+      {
+        method:"GET",
+        credentials:"include",
+        headers:{
+          "Accept":
+            "application/json"
+        }
+      }
+    );
+
+  const data =
+    await response.json()
+      .catch(() => ({}));
+
+  if(!response.ok){
+
+    throw new Error(
+      data.error ||
+      "Erreur serveur"
+    );
+  }
+
+  return data;
+}
+
+
+async function apiPost(action,payload={}){
+
+  const response =
+    await fetch(
+      "/api/storage",
+      {
+        method:"POST",
+        credentials:"include",
+        headers:{
+          "Content-Type":
+            "application/json",
+          "Accept":
+            "application/json"
+        },
+        body:JSON.stringify({
+          action,
+          ...payload
+        })
+      }
+    );
+
+  const data =
+    await response.json()
+      .catch(() => ({}));
+
+  if(!response.ok){
+
+    throw new Error(
+      data.error ||
+      "Erreur serveur"
+    );
+  }
+
+  return data;
+}
+
+
+/* ============================================================
+   HELPERS
+============================================================ */
+
+function escapeHtml(value){
+
+  return String(
+    value ?? ""
+  )
+  .replaceAll("&","&amp;")
+  .replaceAll("<","&lt;")
+  .replaceAll(">","&gt;")
+  .replaceAll('"',"&quot;")
+  .replaceAll("'","&#039;");
+}
+
+
+function fmtNum(value){
+
+  const n =
+    Number(value || 0);
+
+  return n.toLocaleString(
+    "fr-FR"
+  );
+}
+
+
+function timeAgo(timestamp){
+
+  const time =
+    Number(timestamp || 0);
+
+  if(!time)
+    return "jamais";
+
+  const diff =
+    Math.max(
+      0,
+      Date.now() - time
+    );
+
+  const sec =
+    Math.floor(diff / 1000);
+
+  if(sec < 60)
+    return "à l'instant";
+
+  const min =
+    Math.floor(sec / 60);
+
+  if(min < 60)
+    return `il y a ${min} min`;
+
+  const hours =
+    Math.floor(min / 60);
+
+  if(hours < 24)
+    return `il y a ${hours} h`;
+
+  const days =
+    Math.floor(hours / 24);
+
+  if(days < 30)
+    return `il y a ${days} j`;
+
+  return new Date(time)
+    .toLocaleDateString(
+      "fr-FR"
+    );
+}
+
+
+function fmtDuration(ms){
+
+  ms =
+    Math.max(
+      0,
+      Number(ms || 0)
+    );
+
+  const totalSeconds =
+    Math.ceil(ms / 1000);
+
+  const days =
+    Math.floor(
+      totalSeconds / 86400
+    );
+
+  const hours =
+    Math.floor(
+      (totalSeconds % 86400) /
+      3600
+    );
+
+  const minutes =
+    Math.floor(
+      (totalSeconds % 3600) /
+      60
+    );
+
+  if(days)
+    return `${days}j ${hours}h`;
+
+  if(hours)
+    return `${hours}h ${minutes}min`;
+
+  return `${minutes}min`;
+}
+
+
+function initials(name){
+
+  return String(
+    name || "?"
+  )
+  .split(/\s+/)
+  .slice(0,2)
+  .map(
+    part =>
+      part.charAt(0)
+  )
+  .join("")
+  .toUpperCase();
+}
+
+
+function colorFromString(value){
+
+  let hash = 0;
+
+  for(
+    let i=0;
+    i<String(value).length;
+    i++
+  ){
+
+    hash =
+      String(value)
+        .charCodeAt(i) +
+      ((hash << 5) - hash);
+  }
+
+  const hue =
+    Math.abs(hash) % 360;
+
+  return `hsl(${hue},65%,45%)`;
+}
+
+
+function guildAvatarHtml(ad,size=48){
+
+  const src =
+    ad.icon ||
+    ad.guildIcon ||
+    "";
+
+  if(src){
+
+    return `
+      <img
+        class="guild-avatar"
+        style="
+          width:${size}px;
+          height:${size}px;
+        "
+        src="${escapeHtml(src)}"
+        alt=""
+        onerror="
+          this.style.display='none';
+          this.nextElementSibling.style.display='flex'
+        "
+      >
+
+      <div
+        class="guild-avatar fallback"
+        style="
+          width:${size}px;
+          height:${size}px;
+          display:none;
+        "
+      >
+        ${initials(ad.guildName)}
+      </div>
+    `;
+  }
+
+  return `
+    <div
+      class="guild-avatar fallback"
+      style="
+        width:${size}px;
+        height:${size}px;
+        background:${colorFromString(
+          ad.guildName
+        )};
+      "
+    >
+      ${initials(ad.guildName)}
+    </div>
+  `;
+}
+
+
+/* ============================================================
+   ACTIONS PUBLIQUES
+============================================================ */
+
+async function savePublication(
+  guildId,
+  existingId=null
+){
+
+  if(!State.user){
+
+    toast(
+      "Connecte-toi avec Discord"
+    );
+
+    return;
+  }
+
+  const description =
+    document.getElementById(
+      "pubDescription"
+    )?.value
+    ?.trim();
+
+  const inviteLink =
+    document.getElementById(
+      "pubInvite"
+    )?.value
+    ?.trim();
+
+  const memberInput =
+    document.getElementById(
+      "pubMembers"
+    )?.value;
+
+  const memberCount =
+    memberInput === ""
+      ? null
+      : Number(memberInput);
+
+  const tags =
+    [...document.querySelectorAll(
+      "#pubTags .chip.active"
+    )]
+    .map(
+      element =>
+        element.textContent.trim()
+    );
+
+  if(!description){
+
+    toast(
+      "Ajoute une description"
+    );
+
+    return;
+  }
+
+  if(
+    inviteLink &&
+    !/^https:\/\/(discord\.gg|discord\.com\/invite)\//i
+      .test(inviteLink)
+  ){
+
+    toast(
+      "Lien Discord invalide"
+    );
+
+    return;
+  }
+
+  try{
+
+    const result =
+      await apiPost(
+        existingId
+          ? "update_ad"
+          : "create_ad",
+        {
+          id: existingId,
+          guildId,
+          description,
+          inviteLink,
+          memberCount,
+          tags
+        }
+      );
+
+    if(result.ad){
+
+      const index =
+        State.ads.findIndex(
+          ad =>
+            String(ad.id) ===
+            String(result.ad.id)
+        );
+
+      if(index >= 0)
+        State.ads[index] =
+          result.ad;
+      else
+        State.ads.push(
+          result.ad
+        );
+    }
+
+    toast(
+      existingId
+        ? "Publication modifiée ✓"
+        : "Publication créée ✓"
+    );
+
+    go("#/mes-pubs");
+
+  }catch(error){
+
+    toast(
+      error.message ||
+      "Impossible d'enregistrer la publication"
+    );
+  }
+}
+
+
+async function deleteAd(id){
+
+  const ad =
+    State.ads.find(
+      item =>
+        String(item.id) ===
+        String(id)
+    );
+
+  if(!ad)
+    return;
+
+  if(
+    !confirm(
+      `Supprimer la publication de "${ad.guildName}" ?`
+    )
+  ){
+
+    return;
+  }
+
+  try{
+
+    await apiPost(
+      "delete_ad",
+      {
+        id
+      }
+    );
+
+    State.ads =
+      State.ads.filter(
+        item =>
+          String(item.id) !==
+          String(id)
+      );
+
+    toast(
+      "Publication supprimée ✓"
+    );
+
+    go("#/mes-pubs");
+
+  }catch(error){
+
+    toast(
+      error.message ||
+      "Suppression impossible"
+    );
+  }
+}
+
+
+function editAd(id){
+
+  const ad =
+    State.ads.find(
+      item =>
+        String(item.id) ===
+        String(id)
+    );
+
+  if(!ad){
+
+    toast(
+      "Publication introuvable"
+    );
+
+    return;
+  }
+
+  if(
+    !State.user ||
+    ad.authorDiscordId !==
+    State.user.discordId
+  ){
+
+    toast(
+      "Tu ne peux modifier que tes publications"
+    );
+
+    return;
+  }
+
+  State._selectedGuild =
+    ad.guildId;
+
+  go("#/publier");
+}
+
+
+async function toggleVote(id){
+
+  try{
+
+    const result =
+      await apiPost(
+        "toggle_vote",
+        {
+          adId:id
+        }
+      );
+
+    const ad =
+      State.ads.find(
+        item =>
+          String(item.id) ===
+          String(id)
+      );
+
+    if(ad){
+
+      ad.votes =
+        Number(
+          result.votes ??
+          ad.votes ??
+          0
+        );
+    }
+
+    if(result.voted !== undefined){
+
+      if(!State._voted)
+        State._voted = {};
+
+      State._voted[id] =
+        result.voted;
+    }
+
+    render();
+
+  }catch(error){
+
+    toast(
+      error.message ||
+      "Impossible de voter"
+    );
+  }
+}
+
+
+function hasVoted(id){
+
+  return !!(
+    State._voted &&
+    State._voted[id]
+  );
+}
+
+
+async function addComment(adId){
+
+  const input =
+    document.getElementById(
+      "commentInput"
+    );
+
+  const text =
+    input?.value
+      ?.trim();
+
+  if(!text)
+    return;
+
+  try{
+
+    const result =
+      await apiPost(
+        "create_comment",
+        {
+          adId,
+          text
+        }
+      );
+
+    if(result.comment){
+
+      State.comments.push(
+        result.comment
+      );
+    }
+
+    toast(
+      "Commentaire ajouté ✓"
+    );
+
+    render();
+
+  }catch(error){
+
+    toast(
+      error.message ||
+      "Impossible d'ajouter le commentaire"
+    );
+  }
+}
+
+
+async function deleteComment(
+  commentId,
+  adId
+){
+
+  try{
+
+    await apiPost(
+      "delete_comment",
+      {
+        commentId
+      }
+    );
+
+    State.comments =
+      State.comments.filter(
+        comment =>
+          String(comment.id) !==
+          String(commentId)
+      );
+
+    toast(
+      "Commentaire supprimé ✓"
+    );
+
+    viewDetail(adId);
+
+  }catch(error){
+
+    toast(
+      error.message ||
+      "Impossible de supprimer le commentaire"
+    );
+  }
+}
+
+
+/* ============================================================
+   NAVIGATION
+============================================================ */
+
+function selectGuild(id){
+
+  State._selectedGuild =
+    id;
+
+  render();
+}
+
+
+function setSort(sort){
+
+  State._sort =
+    sort;
+
+  render();
+}
+
+
+function setTagFilter(tag){
+
+  State._tagFilter =
+    tag;
+
+  render();
+}
+
+
+function openAd(id){
+
+  go(
+    `#/pub/${encodeURIComponent(id)}`
+  );
+}
+
+
+/* ============================================================
+   AJOUT MODERATION DANS LA SIDEBAR
+============================================================ */
+
+function isModerator(){
+
+  return !!(
+    State.user &&
+    State.user.discordId ===
+    MODERATOR_ID
+  );
+}
+
+
+function injectModerationNav(){
+
+  const existing =
+    document.getElementById(
+      "moderationNav"
+    );
+
+  if(existing)
+    existing.remove();
+
+  if(!isModerator())
+    return;
+
+  /*
+   * On cherche la sidebar actuelle.
+   * Le code s'adapte à plusieurs
+   * structures de l'interface.
+   */
+
+  const sidebar =
+    document.querySelector(
+      ".sidebar nav"
+    ) ||
+    document.querySelector(
+      ".sidebar"
+    );
+
+  if(!sidebar)
+    return;
+
+  const wrapper =
+    document.createElement(
+      "div"
+    );
+
+  wrapper.id =
+    "moderationNav";
+
+  wrapper.className =
+    "moderation-nav";
+
+  wrapper.innerHTML = `
+
+    <div class="nav-section-title">
+      MODÉRATION
+    </div>
+
+    <button
+      class="nav-item"
+      onclick="
+        go('#/moderation')
+      "
+    >
+      🛡️
+      <span>Modération</span>
+    </button>
+
+    <button
+      class="nav-item"
+      onclick="
+        go('#/moderation/pubs')
+      "
+    >
+      📢
+      <span>Toutes les pubs</span>
+    </button>
+
+    <button
+      class="nav-item"
+      onclick="
+        go('#/moderation/bans')
+      "
+    >
+      🚫
+      <span>Utilisateurs bannis</span>
+    </button>
+
+    <button
+      class="nav-item"
+      onclick="
+        go('#/moderation/stats')
+      "
+    >
+      📊
+      <span>Statistiques</span>
+    </button>
+
+    <button
+      class="nav-item"
+      onclick="
+        go('#/moderation/logs')
+      "
+    >
+      📝
+      <span>Journal</span>
+    </button>
+  `;
+
+  sidebar.appendChild(
+    wrapper
+  );
+}
+
+
+/* ============================================================
+   ROUTER
+============================================================ */
+
+function route(){
+
+  const hash =
+    location.hash || "#/";
+
+  if(
+    hash === "#/" ||
+    hash === "#"
+  ){
+
+    viewHome();
+
+  }else if(
+    hash === "#/publier"
+  ){
+
+    viewPublish();
+
+  }else if(
+    hash === "#/mes-pubs"
+  ){
+
+    viewMyAds();
+
+  }else if(
+    hash === "#/moderation"
+  ){
+
+    viewModeration();
+
+  }else if(
+    hash === "#/moderation/pubs"
+  ){
+
+    viewModerationAds();
+
+  }else if(
+    hash === "#/moderation/bans"
+  ){
+
+    viewModerationBans();
+
+  }else if(
+    hash === "#/moderation/stats"
+  ){
+
+    viewModerationStats();
+
+  }else if(
+    hash === "#/moderation/logs"
+  ){
+
+    viewModerationLogs();
+
+  }else if(
+    hash.startsWith("#/pub/")
+  ){
+
+    const id =
+      decodeURIComponent(
+        hash.slice(6)
+      );
+
+    viewDetail(id);
+
+  }else{
+
+    go("#/");
+
+  }
+
+  injectModerationNav();
+}
+
+
+window.addEventListener(
+  "hashchange",
+  route
+);
+
+
+/* ============================================================
+   INITIALISATION
+============================================================ */
+
+(async function init(){
+
+  try{
+
+    if(
+      typeof loadAll ===
+      "function"
+    ){
+
+      await loadAll();
+
+    }
+
+  }catch(error){
+
+    console.error(
+      "loadAll error:",
+      error
+    );
+  }
+
+  try{
+
+    await consumeDiscordAuthFromUrl();
+
+  }catch(error){
+
+    console.error(
+      "Discord auth error:",
+      error
+    );
+  }
+
+  /*
+   * Les annonces sont maintenant
+   * récupérées depuis le serveur.
+   */
+
+  try{
+
+    const data =
+      await apiGet("public");
+
+    if(data.ads)
+      State.ads =
+        data.ads;
+
+    if(data.comments)
+      State.comments =
+        data.comments;
+
+  }catch(error){
+
+    console.warn(
+      "API publique indisponible:",
+      error
+    );
+  }
+
+  route();
+
+})();
+
+
+/* ============================================================
+   REFRESH AUTOMATIQUE
+============================================================ */
+
+setInterval(
+  async () => {
+
+    try{
+
+      const data =
+        await apiGet("public");
+
+      if(data.ads)
+        State.ads =
+          data.ads;
+
+      if(data.comments)
+        State.comments =
+          data.comments;
+
+      /*
+       * On ne force pas un re-render
+       * lorsqu'un champ est actuellement
+       * en train d'être édité.
+       */
+
+      if(
+        !document.activeElement ||
+        ![
+          "INPUT",
+          "TEXTAREA",
+          "SELECT"
+        ].includes(
+          document.activeElement.tagName
+        )
+      ){
+
+        route();
+
+      }
+
+    }catch(error){
+
+      console.warn(
+        "Refresh API:",
+        error
+      );
+    }
+
+  },
+  30000
+);
